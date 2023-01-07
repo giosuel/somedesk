@@ -1,0 +1,140 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon, PrimaryButton, GhostButton, Card, Avatar, Spinner } from "widgets.slint";
+
+component Backdrop inherits Rectangle {
+    background: #05060acc;
+    TouchArea { }
+}
+
+export component IncomingDialog inherits Backdrop {
+    in property <string> user;
+    in property <string> user-letter;
+    in property <string> device;
+    in property <string> fingerprint;
+    in property <bool> same-account;
+    callback answer(bool);
+    Card {
+        width: 440px;
+        height: body.preferred-height;
+        body := VerticalLayout {
+            padding: 28px;
+            spacing: 16px;
+            HorizontalLayout {
+                spacing: 14px;
+                Avatar { letter: root.user-letter; size: 48px; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text { text: "Incoming connection"; color: Theme.text; font-size: 18px; font-weight: 700; }
+                    Text { text: root.user + " · " + root.device; color: Theme.muted; font-size: 13px; }
+                }
+            }
+            Text {
+                text: root.user + " wants to view and control this computer. They will see your screen and can use your mouse and keyboard.";
+                color: Theme.text;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                border-radius: 10px;
+                background: Theme.input-bg;
+                border-width: 1px;
+                border-color: Theme.border;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Icon { d: Icons.fingerprint; size: 14px; color: Theme.muted; stroke: 1.8px; }
+                        Text {
+                            text: root.same-account ? "Verified: one of your own devices" : "Their identity fingerprint";
+                            color: root.same-account ? Theme.success : Theme.muted;
+                            font-size: 12px;
+                            font-weight: 600;
+                        }
+                    }
+                    Text { text: root.fingerprint; color: #c9c3ff; font-size: 13px; font-family: Theme.mono; }
+                }
+            }
+            if !root.same-account: Text {
+                text: "Only accept if you are expecting this connection.";
+                color: Theme.warning;
+                font-size: 12px;
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: end;
+                GhostButton { width: 120px; text: "Decline"; clicked => { root.answer(false); } }
+                PrimaryButton { width: 140px; text: "Accept"; clicked => { root.answer(true); } }
+            }
+        }
+    }
+}
+
+export component OutgoingDialog inherits Backdrop {
+    in property <string> target;
+    callback cancel();
+    Card {
+        width: 380px;
+        height: body.preferred-height;
+        body := VerticalLayout {
+            padding: 30px;
+            spacing: 16px;
+            alignment: center;
+            Rectangle {
+                height: 64px;
+                Rectangle {
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 18px;
+                    background: Theme.accent-soft;
+                    Icon { d: Icons.monitor; size: 30px; color: #b9b1ff; }
+                }
+            }
+            Text {
+                text: "Connecting to " + root.target;
+                color: Theme.text;
+                font-size: 17px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "Waiting for someone at the other computer to accept…";
+                color: Theme.muted;
+                font-size: 13px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            Spinner { }
+            HorizontalLayout {
+                alignment: center;
+                GhostButton { width: 120px; text: "Cancel"; clicked => { root.cancel(); } }
+            }
+        }
+    }
+}
+
+export component Toast inherits Rectangle {
+    in property <string> text;
+    in property <bool> error;
+    height: 44px;
+    width: row.preferred-width + 32px;
+    border-radius: 12px;
+    background: #1d2230f2;
+    border-width: 1px;
+    border-color: root.error ? #f0526a66 : Theme.border-strong;
+    drop-shadow-blur: 20px;
+    drop-shadow-color: #00000080;
+    row := HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        Rectangle {
+            y: (parent.height - 8px) / 2;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.error ? Theme.danger : Theme.success;
+        }
+        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+    }
+}

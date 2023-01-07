@@ -1,0 +1,29 @@
+[package]
+name = "somedesk-server"
+description = "SomeDesk account server and end-to-end-encrypted relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "somedesk-server"
+path = "src/main.rs"
+
+[dependencies]
+somedesk-proto.workspace = true
+somedesk-crypto.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+postcard.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
+quinn.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
+sqlx.workspace = true
+dashmap.workspace = true

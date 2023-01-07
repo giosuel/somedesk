@@ -1,0 +1,205 @@
+import { Theme, Icons } from "theme.slint";
+import { Logo, Icon, Field, PrimaryButton, Card } from "widgets.slint";
+
+component Feature inherits HorizontalLayout {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> body;
+    spacing: 14px;
+    Rectangle {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: #ffffff0f;
+        border-width: 1px;
+        border-color: #ffffff14;
+        Icon { d: root.icon; color: #b9b1ff; size: 20px; }
+    }
+    VerticalLayout {
+        spacing: 3px;
+        alignment: center;
+        Text { text: root.title; color: Theme.text; font-size: 14px; font-weight: 600; }
+        Text { text: root.body; color: #a3abc0; font-size: 13px; wrap: word-wrap; }
+    }
+}
+
+component Tab inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked;
+    height: 36px;
+    border-radius: 9px;
+    background: root.active ? Theme.card-hover : transparent;
+    Text {
+        text: root.text;
+        color: root.active ? Theme.text : Theme.muted;
+        font-size: 13px;
+        font-weight: 600;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component LoginPage inherits Rectangle {
+    in property <string> error;
+    in property <bool> busy;
+    in-out property <string> server;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <string> password2;
+    in-out property <string> device-name;
+    in-out property <bool> create-mode;
+    callback submit();
+    background: Theme.bg;
+
+    HorizontalLayout {
+        // Brand panel
+        Rectangle {
+            horizontal-stretch: 0.9;
+            clip: true;
+            background: @linear-gradient(155deg, #1d1650 0%, #121a3d 50%, #0b0d12 100%);
+            Rectangle {
+                x: parent.width * 0.45;
+                y: -parent.height * 0.18;
+                width: parent.width * 0.95;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: @radial-gradient(circle, #7b61ff44 0%, #7b61ff00 70%);
+            }
+            Rectangle {
+                x: -parent.width * 0.35;
+                y: parent.height * 0.55;
+                width: parent.width * 0.9;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: @radial-gradient(circle, #3e8bff33 0%, #3e8bff00 70%);
+            }
+            VerticalLayout {
+                padding: 52px;
+                spacing: 0px;
+                Logo { }
+                Rectangle { vertical-stretch: 1; }
+                Text {
+                    text: "Remote desktop,\nprivate by design.";
+                    color: white;
+                    font-size: 34px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 14px; }
+                Text {
+                    text: "Reach and support your computers from anywhere. Every session is end-to-end encrypted between the two devices.";
+                    color: #a3abc0;
+                    font-size: 15px;
+                    wrap: word-wrap;
+                }
+                Rectangle { height: 34px; }
+                VerticalLayout {
+                    spacing: 20px;
+                    Feature {
+                        icon: Icons.lock;
+                        title: "End-to-end encrypted";
+                        body: "The relay server only ever sees ciphertext.";
+                    }
+                    Feature {
+                        icon: Icons.key;
+                        title: "Your password stays with you";
+                        body: "Zero-knowledge login (OPAQUE). Your keys are sealed with your password.";
+                    }
+                    Feature {
+                        icon: Icons.bolt;
+                        title: "Fast and lightweight";
+                        body: "Native Rust client with hardware-friendly H.264 streaming.";
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+                Text { text: "Self-hosted · Open protocol"; color: #6b7390; font-size: 12px; }
+            }
+        }
+
+        // Form
+        Rectangle {
+            horizontal-stretch: 1;
+            VerticalLayout {
+                alignment: center;
+                padding-left: 64px;
+                padding-right: 64px;
+                HorizontalLayout {
+                    alignment: center;
+                    Card {
+                        width: 400px;
+                        VerticalLayout {
+                            padding: 30px;
+                            spacing: 16px;
+                            Text {
+                                text: root.create-mode ? "Create your account" : "Welcome back";
+                                color: Theme.text;
+                                font-size: 24px;
+                                font-weight: 700;
+                            }
+                            Text {
+                                text: root.create-mode ? "Set up SomeDesk on this computer." : "Sign in to bring this computer online.";
+                                color: Theme.muted;
+                                font-size: 13px;
+                            }
+                            Rectangle {
+                                height: 44px;
+                                border-radius: 12px;
+                                background: Theme.input-bg;
+                                border-width: 1px;
+                                border-color: Theme.border;
+                                HorizontalLayout {
+                                    padding: 4px;
+                                    spacing: 4px;
+                                    Tab { text: "Sign in"; active: !root.create-mode; clicked => { root.create-mode = false; } }
+                                    Tab { text: "Create account"; active: root.create-mode; clicked => { root.create-mode = true; } }
+                                }
+                            }
+                            Field { label: "Server"; placeholder: "desk.example.com"; text <=> root.server; enabled: !root.busy; }
+                            Field { label: "Username"; placeholder: "your-name"; text <=> root.username; enabled: !root.busy; }
+                            Field {
+                                label: "Password";
+                                placeholder: root.create-mode ? "At least 8 characters" : "Your password";
+                                password: true;
+                                text <=> root.password;
+                                enabled: !root.busy;
+                                accepted => { if (!root.create-mode) { root.submit(); } }
+                            }
+                            if root.create-mode: Field {
+                                label: "Confirm password";
+                                placeholder: "Repeat your password";
+                                password: true;
+                                text <=> root.password2;
+                                enabled: !root.busy;
+                            }
+                            Field { label: "Name of this computer"; placeholder: "e.g. office-pc"; text <=> root.device-name; enabled: !root.busy; }
+                            if root.error != "": Rectangle {
+                                background: Theme.danger-soft;
+                                border-radius: 10px;
+                                HorizontalLayout {
+                                    padding: 12px;
+                                    Text { text: root.error; color: Theme.danger; font-size: 13px; wrap: word-wrap; }
+                                }
+                            }
+                            PrimaryButton {
+                                text: root.create-mode ? "Create account" : "Sign in";
+                                icon: Icons.arrow-right;
+                                busy: root.busy;
+                                clicked => { root.submit(); }
+                            }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                alignment: center;
+                                Icon { d: Icons.shield; color: Theme.subtle; size: 14px; stroke: 1.8px; }
+                                Text {
+                                    text: "Your password never leaves this device.";
+                                    color: Theme.subtle;
+                                    font-size: 12px;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

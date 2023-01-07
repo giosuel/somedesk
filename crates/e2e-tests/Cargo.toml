@@ -1,0 +1,25 @@
+[package]
+name = "somedesk-e2e-tests"
+description = "Integration tests: real server, PostgreSQL, QUIC relay and clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+somedesk-proto.workspace = true
+somedesk-crypto.workspace = true
+somedesk-client.workspace = true
+somedesk-server.workspace = true
+somedesk-platform.workspace = true
+somedesk-codec.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+rand.workspace = true
+hex.workspace = true
+postcard.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+x11rb = { version = "0.13", features = ["xtest"] }

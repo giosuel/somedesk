@@ -1,0 +1,44 @@
+import "fonts/Inter-Regular.ttf";
+import "fonts/Inter-Medium.ttf";
+import "fonts/Inter-SemiBold.ttf";
+import "fonts/Inter-Bold.ttf";
+
+export global Theme {
+    out property <color> bg: #0b0d12;
+    out property <color> panel: #10131a;
+    out property <color> card: #151922;
+    out property <color> card-hover: #1b2030;
+    out property <color> input-bg: #0f1218;
+    out property <color> border: #232a38;
+    out property <color> border-strong: #303849;
+    out property <color> text: #e9ecf2;
+    out property <color> muted: #8a93a6;
+    out property <color> subtle: #5b6478;
+    out property <color> accent: #6d5dfc;
+    out property <color> accent-soft: #6d5dfc26;
+    out property <color> blue: #3e8bff;
+    out property <color> success: #22c55e;
+    out property <color> success-soft: #22c55e1f;
+    out property <color> danger: #f0526a;
+    out property <color> danger-soft: #f0526a1f;
+    out property <color> warning: #f5a524;
+    out property <color> warning-soft: #f5a5241f;
+    out property <brush> accent-gradient: @linear-gradient(135deg, #7b61ff 0%, #3e8bff 100%);
+    out property <string> mono: "DejaVu Sans Mono";
+}
+
+// 24x24 stroke icons (drawn for SomeDesk, Lucide-style).
+export global Icons {
+    out property <string> monitor: "M3 4 H21 V16 H3 Z M8 20 H16 M12 16 V20";
+    out property <string> lock: "M5 11 H19 V21 H5 Z M8 11 V7 A4 4 0 0 1 16 7 V11";
+    out property <string> shield: "M12 3 L20 6 V12 C20 16.5 16.5 19.8 12 21 C7.5 19.8 4 16.5 4 12 V6 Z M9 12 L11 14 L15 10";
+    out property <string> bolt: "M13 2 L4 14 H11 L10 22 L19 10 H12 Z";
+    out property <string> key: "M7.5 15.5 A3.5 3.5 0 1 1 7.5 15.49 M10 13 L20 3 M16 7 L19 10 M14 9 L16 11";
+    out property <string> power: "M12 3 V12 M6.3 6.3 A8 8 0 1 0 17.7 6.3";
+    out property <string> arrow-right: "M5 12 H19 M13 6 L19 12 L13 18";
+    out property <string> logout: "M15 4 H19 V20 H15 M10 8 L6 12 L10 16 M6 12 H16";
+    out property <string> server: "M4 4 H20 V10 H4 Z M4 14 H20 V20 H4 Z M8 7 H8.01 M8 17 H8.01";
+    out property <string> fingerprint: "M12 11 V14 M8 8.5 A5 5 0 0 1 17 11 V13 M7 12 V14 A5 5 0 0 0 9 18 M15 16 A4 4 0 0 1 14.5 18";
+    out property <string> x: "M6 6 L18 18 M18 6 L6 18";
+    out property <string> link: "M10 14 L14 10 M9 7 L11 5 A4 4 0 0 1 19 13 L17 15 M15 17 L13 19 A4 4 0 0 1 5 11 L7 9";
+}

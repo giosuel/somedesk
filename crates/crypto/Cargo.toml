@@ -1,0 +1,24 @@
+[package]
+name = "somedesk-crypto"
+description = "OPAQUE login, password-wrapped key bundles, device certificates and the Noise session channel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+somedesk-proto.workspace = true
+serde.workspace = true
+postcard.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+opaque-ke.workspace = true
+argon2.workspace = true
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+snow.workspace = true
+zeroize.workspace = true
+hex.workspace = true

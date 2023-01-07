@@ -1,0 +1,128 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon, PrimaryButton, GhostButton, Pill, Spinner } from "widgets.slint";
+
+export component SessionPage inherits Rectangle {
+    in property <string> peer;
+    in property <string> peer-id;
+    in property <image> frame;
+    in property <bool> has-frame;
+    in property <string> latency;
+    in property <string> fps;
+    in property <string> resolution;
+    callback disconnect();
+    callback pointer-moved(length, length, length, length);
+    callback pointer-button(int, bool);
+    callback scroll(length, length);
+    callback key(string, bool);
+    background: #000000;
+
+    VerticalLayout {
+        // Toolbar
+        Rectangle {
+            height: 52px;
+            background: Theme.panel;
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 12px;
+                spacing: 14px;
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    width: 30px;
+                    height: 30px;
+                    border-radius: 9px;
+                    background: Theme.accent-gradient;
+                    Icon { d: Icons.monitor; size: 16px; color: white; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text { text: root.peer; color: Theme.text; font-size: 13px; font-weight: 600; }
+                    Text { text: root.peer-id; color: Theme.muted; font-size: 11px; font-family: Theme.mono; }
+                }
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 26px;
+                    width: e2e.preferred-width + 20px;
+                    border-radius: 13px;
+                    background: Theme.success-soft;
+                    e2e := HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        Icon { y: (parent.height - self.height) / 2; d: Icons.lock; size: 13px; color: Theme.success; stroke: 2.2px; }
+                        Text { text: "End-to-end encrypted"; color: Theme.success; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                for stat in [
+                    { label: "Latency", value: root.latency },
+                    { label: "FPS", value: root.fps },
+                    { label: "Screen", value: root.resolution },
+                ]: VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text { text: stat.label; color: Theme.subtle; font-size: 10px; font-weight: 600; horizontal-alignment: right; }
+                    Text { text: stat.value; color: Theme.text; font-size: 12px; font-family: Theme.mono; horizontal-alignment: right; }
+                }
+                Rectangle { width: 4px; }
+                PrimaryButton {
+                    y: (parent.height - self.height) / 2;
+                    height: 34px;
+                    text: "Disconnect";
+                    icon: Icons.power;
+                    danger: true;
+                    clicked => { root.disconnect(); }
+                }
+            }
+        }
+
+        // Remote screen
+        Rectangle {
+            vertical-stretch: 1;
+            background: #050608;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.frame;
+                image-fit: contain;
+                image-rendering: smooth;
+            }
+            if !root.has-frame: VerticalLayout {
+                alignment: center;
+                spacing: 14px;
+                Spinner { }
+                Text { text: "Waiting for the remote screen…"; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+            }
+            keys := FocusScope {
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    root.key(e.text, true);
+                    accept
+                }
+                key-released(e) => {
+                    root.key(e.text, false);
+                    accept
+                }
+                TouchArea {
+                    mouse-cursor: default;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.move) {
+                            root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height);
+                        } else if (e.kind == PointerEventKind.down || e.kind == PointerEventKind.up) {
+                            keys.focus();
+                            root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height);
+                            root.pointer-button(
+                                e.button == PointerEventButton.left ? 1 : e.button == PointerEventButton.middle ? 2 : e.button == PointerEventButton.right ? 3 : 0,
+                                e.kind == PointerEventKind.down);
+                        }
+                    }
+                    moved => { root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height); }
+                    scroll-event(e) => {
+                        root.scroll(e.delta-x, e.delta-y);
+                        accept
+                    }
+                }
+            }
+        }
+    }
+}
