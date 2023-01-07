@@ -1,0 +1,22 @@
+[package]
+name = "somedesk-client"
+description = "SomeDesk client core: server connection, account flows, host and viewer sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+somedesk-proto.workspace = true
+somedesk-crypto.workspace = true
+somedesk-codec.workspace = true
+somedesk-platform.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+sha2.workspace = true
+hex.workspace = true
+quinn.workspace = true
+rustls.workspace = true

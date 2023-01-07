@@ -1,0 +1,288 @@
+import { Theme, Icons } from "theme.slint";
+
+export component Icon {
+    in property <string> d;
+    in property <brush> color: Theme.text;
+    in property <length> size: 20px;
+    in property <length> stroke: 2px;
+    width: size;
+    height: size;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.d;
+        stroke: root.color;
+        stroke-width: root.stroke;
+        fill: transparent;
+    }
+}
+
+export component Logo inherits HorizontalLayout {
+    in property <length> mark-size: 34px;
+    in property <length> font-size: 19px;
+    spacing: 10px;
+    alignment: start;
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        width: root.mark-size;
+        height: root.mark-size;
+        border-radius: root.mark-size * 0.28;
+        background: Theme.accent-gradient;
+        drop-shadow-blur: 14px;
+        drop-shadow-color: #6d5dfc66;
+        Icon { d: Icons.monitor; color: white; size: root.mark-size * 0.58; stroke: 2.2px; }
+    }
+    Text {
+        text: "SomeDesk";
+        font-size: root.font-size;
+        font-weight: 700;
+        color: Theme.text;
+        vertical-alignment: center;
+    }
+}
+
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <bool> busy: false;
+    in property <bool> danger: false;
+    callback clicked;
+    height: 44px;
+    min-width: content.preferred-width + 36px;
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+    border-radius: 10px;
+    background: !root.enabled ? Theme.card-hover : root.danger ? Theme.danger : Theme.accent-gradient;
+    drop-shadow-blur: root.enabled && !root.danger ? 16px : 0px;
+    drop-shadow-color: #6d5dfc40;
+    drop-shadow-offset-y: 4px;
+    Rectangle {
+        border-radius: parent.border-radius;
+        background: ta.pressed ? #00000030 : ta.has-hover ? #ffffff14 : transparent;
+    }
+    content := HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        if root.icon != "" && !root.busy: Icon {
+            y: (parent.height - self.height) / 2;
+            d: root.icon;
+            size: 16px;
+            color: root.enabled ? white : Theme.subtle;
+        }
+        Text {
+            text: root.busy ? "Please wait…" : root.text;
+            color: root.enabled ? white : Theme.subtle;
+            font-size: 14px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled && !root.busy;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component GhostButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <length> button-height: 40px;
+    in property <color> fg: Theme.text;
+    callback clicked;
+    height: root.button-height;
+    min-width: content.preferred-width + 28px;
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ta.has-hover && root.enabled ? Theme.border-strong : Theme.border;
+    background: ta.pressed ? Theme.card : ta.has-hover && root.enabled ? Theme.card-hover : transparent;
+    opacity: root.enabled ? 1 : 0.45;
+    content := HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        if root.icon != "": Icon {
+            y: (parent.height - self.height) / 2;
+            d: root.icon;
+            size: 16px;
+            color: root.fg;
+        }
+        Text {
+            text: root.text;
+            color: root.fg;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> password: false;
+    in property <bool> enabled: true;
+    in property <length> field-height: 42px;
+    in property <length> font-size: 14px;
+    in property <string> font-family;
+    in-out property <string> text <=> input.text;
+    callback accepted;
+    callback edited(string);
+    public function focus-input() { input.focus(); }
+    spacing: 7px;
+    if root.label != "": Text {
+        text: root.label;
+        color: Theme.muted;
+        font-size: 12px;
+        font-weight: 500;
+    }
+    Rectangle {
+        height: root.field-height;
+        border-radius: 10px;
+        background: Theme.input-bg;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : focus-ta.has-hover ? Theme.border-strong : Theme.border;
+        animate border-color { duration: 120ms; }
+        focus-ta := TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => { input.focus(); }
+        }
+        placeholder := Text {
+            x: 14px;
+            width: parent.width - 28px;
+            height: parent.height;
+            text: root.placeholder;
+            visible: input.text == "";
+            color: Theme.subtle;
+            font-size: root.font-size;
+            font-family: root.font-family;
+            vertical-alignment: center;
+        }
+        input := TextInput {
+            x: 14px;
+            width: parent.width - 28px;
+            height: parent.height;
+            enabled: root.enabled;
+            single-line: true;
+            vertical-alignment: center;
+            color: Theme.text;
+            selection-background-color: #6d5dfc80;
+            font-size: root.font-size;
+            font-family: root.font-family;
+            input-type: root.password ? InputType.password : InputType.text;
+            accepted => { root.accepted(); }
+            edited => { root.edited(self.text); }
+        }
+    }
+}
+
+export component Card inherits Rectangle {
+    in property <length> pad: 22px;
+    background: Theme.card;
+    border-radius: 16px;
+    border-width: 1px;
+    border-color: Theme.border;
+    drop-shadow-blur: 30px;
+    drop-shadow-color: #00000055;
+    drop-shadow-offset-y: 10px;
+}
+
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <color> fg: Theme.success;
+    in property <color> bg: Theme.success-soft;
+    in property <bool> dot: true;
+    height: 24px;
+    width: row.preferred-width + 20px;
+    border-radius: 12px;
+    background: root.bg;
+    row := HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        if root.dot: Rectangle {
+            y: (parent.height - 7px) / 2;
+            width: 7px;
+            height: 7px;
+            border-radius: 3.5px;
+            background: root.fg;
+        }
+        Text {
+            text: root.text;
+            color: root.fg;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component Switch inherits Rectangle {
+    in-out property <bool> checked;
+    callback toggled(bool);
+    width: 40px;
+    height: 22px;
+    border-radius: 11px;
+    background: root.checked ? Theme.accent : Theme.border-strong;
+    animate background { duration: 150ms; }
+    Rectangle {
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        y: 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: white;
+        animate x { duration: 150ms; easing: ease-out; }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+export component Avatar inherits Rectangle {
+    /// One or two letters shown in the circle.
+    in property <string> letter;
+    in property <length> size: 36px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    background: Theme.accent-gradient;
+    Text {
+        text: root.letter == "" ? "?" : root.letter;
+        color: white;
+        font-size: root.size * 0.42;
+        font-weight: 700;
+    }
+}
+
+/// Three pulsing dots.
+export component Spinner inherits HorizontalLayout {
+    property <float> t: Math.mod(animation-tick() / 1200ms, 1);
+    spacing: 6px;
+    alignment: center;
+    for i in 3: Rectangle {
+        width: 8px;
+        height: 8px;
+        border-radius: 4px;
+        background: Theme.accent;
+        opacity: 0.25 + 0.75 * Math.max(0, 1 - Math.abs(Math.mod(root.t * 3 - i + 3, 3) - 0.5) * 1.2);
+    }
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border;
+}

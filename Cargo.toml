@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = ["crates/proto", "crates/crypto", "crates/server", "crates/codec", "crates/platform", "crates/client", "crates/e2e-tests", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+somedesk-proto = { path = "crates/proto" }
+somedesk-crypto = { path = "crates/crypto" }
+somedesk-client = { path = "crates/client" }
+somedesk-platform = { path = "crates/platform" }
+somedesk-codec = { path = "crates/codec" }
+somedesk-server = { path = "crates/server" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", features = ["use-std"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+
+# Crypto: pinned to one RustCrypto generation (rand_core 0.6) so everything interoperates.
+rand = "0.8"
+opaque-ke = { version = "3.0", features = ["argon2"] }
+argon2 = "0.5"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+snow = "0.9"
+zeroize = { version = "1", features = ["derive"] }
+hex = "0.4"
+
+# Networking
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+rcgen = "0.13"
+
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono"] }
+dashmap = "6"
+
+# Crypto (Argon2, curve25519) and video codecs are painfully slow unoptimized.
+[profile.dev.package."*"]
+opt-level = 3

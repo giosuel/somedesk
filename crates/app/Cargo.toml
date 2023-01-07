@@ -1,0 +1,30 @@
+[package]
+name = "somedesk-app"
+description = "SomeDesk desktop client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "somedesk"
+path = "src/main.rs"
+
+[dependencies]
+somedesk-proto.workspace = true
+somedesk-crypto.workspace = true
+somedesk-client.workspace = true
+somedesk-platform.workspace = true
+somedesk-codec.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+hex.workspace = true
+slint = { version = "1.18", features = ["unstable-winit-030"] }
+
+[build-dependencies]
+slint-build = "1.18"

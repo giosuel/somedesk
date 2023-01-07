@@ -1,0 +1,331 @@
+import { Theme, Icons } from "theme.slint";
+import { Logo, Icon, Field, PrimaryButton, GhostButton, Card, Pill, Switch, Avatar, Divider, Spinner } from "widgets.slint";
+
+export struct DeviceItem {
+    id: string,
+    id-label: string,
+    name: string,
+    online: bool,
+    is-self: bool,
+}
+
+component SectionTitle inherits Text {
+    color: Theme.muted;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+}
+
+component DeviceRow inherits Rectangle {
+    in property <DeviceItem> device;
+    callback connect(string);
+    height: 64px;
+    border-radius: 12px;
+    background: ta.has-hover ? Theme.card-hover : transparent;
+    ta := TouchArea { }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 14px;
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 40px;
+            height: 40px;
+            border-radius: 11px;
+            background: root.device.online ? Theme.accent-soft : #ffffff0a;
+            Icon { d: Icons.monitor; size: 20px; color: root.device.online ? #b9b1ff : Theme.subtle; }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text { text: root.device.name; color: Theme.text; font-size: 14px; font-weight: 600; }
+                if root.device.is-self: Rectangle {
+                    width: tag.preferred-width + 12px;
+                    height: 18px;
+                    border-radius: 5px;
+                    background: #ffffff10;
+                    tag := Text { text: "This computer"; color: Theme.muted; font-size: 10px; font-weight: 600; }
+                }
+            }
+            Text { text: "ID " + root.device.id-label; color: Theme.muted; font-size: 12px; font-family: Theme.mono; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Pill {
+            y: (parent.height - self.height) / 2;
+            text: root.device.online ? "Online" : "Offline";
+            fg: root.device.online ? Theme.success : Theme.subtle;
+            bg: root.device.online ? Theme.success-soft : #ffffff0a;
+        }
+        if !root.device.is-self: GhostButton {
+            y: (parent.height - self.height) / 2;
+            width: 104px;
+            button-height: 34px;
+            text: "Connect";
+            icon: Icons.arrow-right;
+            enabled: root.device.online;
+            clicked => { root.connect(root.device.id); }
+        }
+        if root.device.is-self: Rectangle { width: 104px; }
+    }
+}
+
+export component HomePage inherits Rectangle {
+    in property <string> my-id;
+    in property <string> my-device-name;
+    in property <string> username;
+    in property <string> user-letter;
+    in property <string> fingerprint;
+    in property <string> server-label;
+    in property <bool> online;
+    in property <string> status-text;
+    in property <[DeviceItem]> devices;
+    in property <bool> connect-busy;
+    in-out property <string> connect-id;
+    in-out property <bool> auto-accept;
+    in property <bool> hosting-active;
+    in property <string> hosting-peer;
+    callback connect(string);
+    callback auto-accept-changed(bool);
+    callback sign-out();
+    callback stop-hosting();
+    background: Theme.bg;
+
+    VerticalLayout {
+        // Top bar
+        Rectangle {
+            height: 64px;
+            background: Theme.panel;
+            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.border; }
+            HorizontalLayout {
+                padding-left: 28px;
+                padding-right: 20px;
+                spacing: 16px;
+                Logo { mark-size: 30px; font-size: 17px; }
+                Rectangle { horizontal-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+                    Rectangle {
+                        y: (parent.height - 8px) / 2;
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.online ? Theme.success : Theme.warning;
+                    }
+                    Text { text: root.status-text; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
+                }
+                Rectangle { width: 1px; background: Theme.border; }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Avatar { y: (parent.height - self.height) / 2; letter: root.user-letter; size: 32px; }
+                    Text { text: root.username; color: Theme.text; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+                }
+                GhostButton {
+                    y: (parent.height - self.height) / 2;
+                    button-height: 34px;
+                    text: "Sign out";
+                    icon: Icons.logout;
+                    fg: Theme.muted;
+                    clicked => { root.sign-out(); }
+                }
+            }
+        }
+
+        // "Someone is controlling this computer" banner
+        if root.hosting-active: Rectangle {
+            height: 48px;
+            background: @linear-gradient(90deg, #f5a52430 0%, #f0526a26 100%);
+            Rectangle { y: parent.height - 1px; height: 1px; background: #f5a52440; }
+            HorizontalLayout {
+                padding-left: 28px;
+                padding-right: 20px;
+                spacing: 12px;
+                Rectangle {
+                    y: (parent.height - 10px) / 2;
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: Theme.warning;
+                }
+                Text {
+                    text: root.hosting-peer + " is viewing and controlling this computer";
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                GhostButton {
+                    y: (parent.height - self.height) / 2;
+                    button-height: 32px;
+                    text: "Stop sharing";
+                    icon: Icons.x;
+                    clicked => { root.stop-hosting(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            padding: 28px;
+            spacing: 24px;
+
+            // Left column: this device
+            VerticalLayout {
+                width: 340px;
+                spacing: 20px;
+                Card {
+                    VerticalLayout {
+                        padding: 24px;
+                        spacing: 14px;
+                        SectionTitle { text: "THIS COMPUTER"; }
+                        VerticalLayout {
+                            spacing: 6px;
+                            Text { text: "Your ID"; color: Theme.muted; font-size: 13px; }
+                            Text {
+                                text: root.my-id;
+                                color: Theme.text;
+                                font-size: 34px;
+                                font-weight: 700;
+                                letter-spacing: 1px;
+                            }
+                            Text { text: root.my-device-name; color: Theme.muted; font-size: 13px; }
+                        }
+                        Divider { }
+                        VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Icon { d: Icons.fingerprint; size: 15px; color: Theme.muted; stroke: 1.8px; }
+                                Text { text: "Identity fingerprint"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                            }
+                            Text { text: root.fingerprint; color: #c9c3ff; font-size: 13px; font-family: Theme.mono; }
+                            Text {
+                                text: "Compare this with what the other side sees to rule out interception.";
+                                color: Theme.subtle;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                            }
+                        }
+                        Divider { }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 3px;
+                                Text { text: "Unattended access"; color: Theme.text; font-size: 13px; font-weight: 600; }
+                                Text {
+                                    text: "Let my own devices connect without asking.";
+                                    color: Theme.subtle;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            Switch {
+                                y: (parent.height - self.height) / 2;
+                                checked <=> root.auto-accept;
+                                toggled(v) => { root.auto-accept-changed(v); }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    border-radius: 14px;
+                    background: @linear-gradient(135deg, #6d5dfc1f 0%, #3e8bff12 100%);
+                    border-width: 1px;
+                    border-color: #6d5dfc33;
+                    HorizontalLayout {
+                        padding: 18px;
+                        spacing: 14px;
+                        Icon { d: Icons.shield; color: #b9b1ff; size: 22px; }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text { text: "End-to-end encrypted"; color: Theme.text; font-size: 13px; font-weight: 600; }
+                            Text {
+                                text: "Sessions are encrypted between the two devices. The server relays them but cannot see your screen or keystrokes.";
+                                color: Theme.muted;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Icon { d: Icons.server; size: 14px; color: Theme.subtle; stroke: 1.8px; }
+                    Text { text: root.server-label; color: Theme.subtle; font-size: 12px; vertical-alignment: center; }
+                }
+            }
+
+            // Right column: connect + device list
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 20px;
+                Card {
+                    VerticalLayout {
+                        padding: 24px;
+                        spacing: 14px;
+                        SectionTitle { text: "REMOTE CONTROL"; }
+                        Text { text: "Connect to a computer"; color: Theme.text; font-size: 20px; font-weight: 700; }
+                        Text {
+                            text: "Enter the 9-digit ID shown on the other computer.";
+                            color: Theme.muted;
+                            font-size: 13px;
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            id-field := Field {
+                                horizontal-stretch: 1;
+                                placeholder: "123 456 789";
+                                field-height: 48px;
+                                font-size: 18px;
+                                text <=> root.connect-id;
+                                enabled: !root.connect-busy;
+                                accepted => { root.connect(root.connect-id); }
+                            }
+                            PrimaryButton {
+                                y: (parent.height - self.height) / 2;
+                                height: 48px;
+                                width: 140px;
+                                text: "Connect";
+                                icon: Icons.arrow-right;
+                                busy: root.connect-busy;
+                                enabled: root.online;
+                                clicked => { root.connect(root.connect-id); }
+                            }
+                        }
+                    }
+                }
+                Card {
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        padding: 24px;
+                        padding-bottom: 12px;
+                        spacing: 10px;
+                        HorizontalLayout {
+                            SectionTitle { text: "YOUR DEVICES"; vertical-alignment: center; }
+                            Rectangle { horizontal-stretch: 1; }
+                            Text {
+                                text: root.devices.length == 1 ? "1 device" : root.devices.length + " devices";
+                                color: Theme.subtle;
+                                font-size: 12px;
+                            }
+                        }
+                        Flickable {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 2px;
+                                for d in root.devices: DeviceRow {
+                                    device: d;
+                                    connect(id) => { root.connect(id); }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

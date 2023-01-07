@@ -1,0 +1,288 @@
+//! Full remote-control sessions through the relay.
+
+use somedesk_client::host::{self, HostSettings};
+use somedesk_client::session;
+use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
+use somedesk_codec::RgbFrame;
+use somedesk_e2e_tests::{Device, FakeCapturer, RecordingInjector, TestServer};
+use somedesk_proto::control::Event;
+use somedesk_proto::session::{SessionMsg, POINTER_MAX};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::{mpsc, watch};
+
+const T: Duration = Duration::from_secs(10);
+
+struct ViewerSide {
+    input: mpsc::UnboundedSender<SessionMsg>,
+    frames: mpsc::UnboundedReceiver<RgbFrame>,
+    accepted: mpsc::UnboundedReceiver<()>,
+    task: tokio::task::JoinHandle<somedesk_client::Result<SessionEnd>>,
+}
+
+async fn start_viewer(viewer: &Device, host_id: u64) -> ViewerSide {
+    let (ch, host_info) = session::connect(&viewer.conn, &viewer.creds, host_id).await.expect("viewer handshake");
+    assert_eq!(ch.peer.device_pk, host_info.cert.device_pk);
+    let (input, input_rx) = mpsc::unbounded_channel();
+    let (ftx, frames) = mpsc::unbounded_channel();
+    let (atx, accepted) = mpsc::unbounded_channel();
+    let sink: viewer::EventSink = Arc::new(move |ev| match ev {
+        ViewerEvent::Frame(f) => {
+            let _ = ftx.send(f);
+        }
+        ViewerEvent::Accepted => {
+            let _ = atx.send(());
+        }
+        _ => {}
+    });
+    let task = tokio::spawn(viewer::run(ch, sink, input_rx));
+    ViewerSide { input, frames, accepted, task }
+}
+
+async fn next_incoming(host: &mut Device) -> (somedesk_proto::control::SessionId, somedesk_proto::control::DeviceInfo) {
+    loop {
+        match tokio::time::timeout(T, host.events.recv()).await.expect("incoming session").unwrap() {
+            Event::IncomingSession { session_id, from } => return (session_id, from),
+            _ => continue,
+        }
+    }
+}
+
+fn pixel(f: &RgbFrame, x: u32, y: u32) -> [u8; 3] {
+    let i = ((y * f.width + x) * 3) as usize;
+    [f.data[i], f.data[i + 1], f.data[i + 2]]
+}
+
+fn close(a: [u8; 3], b: [u8; 3]) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 12)
+}
+
+async fn frame_matching(frames: &mut mpsc::UnboundedReceiver<RgbFrame>, rgb: [u8; 3]) -> RgbFrame {
+    let deadline = tokio::time::Instant::now() + T;
+    loop {
+        let f = tokio::time::timeout_at(deadline, frames.recv()).await.expect("frame with expected color").unwrap();
+        if close(pixel(&f, f.width / 2, f.height / 2), rgb) {
+            return f;
+        }
+    }
+}
+
+#[tokio::test]
+async fn remote_control_session_end_to_end() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice-marker-user", "correct horse battery", "alice-laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "bob-desktop").await;
+    let host_id = host_dev.creds.device_id;
+
+    let viewer_task = start_viewer(&viewer_dev, host_id);
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        assert_eq!(from.username, "alice-marker-user");
+        let ch = session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.expect("host handshake");
+        assert_eq!(ch.peer.username, "alice-marker-user", "host sees the verified viewer identity");
+        ch
+    };
+    let (mut v, host_ch) = tokio::join!(viewer_task, host_side);
+
+    // Host serves a fake 320x240 screen and records injected input.
+    let color = Arc::new(Mutex::new([0x20, 0x40, 0xE0, 0xFF])); // BGRA → RGB (224, 64, 32)
+    let injector = RecordingInjector { size: (1920, 1080), ..Default::default() };
+    let log = injector.log.clone();
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let cap = FakeCapturer { width: 320, height: 240, bgra: color.clone() };
+    let host_task =
+        tokio::spawn(host::serve(host_ch, Box::new(cap), Box::new(injector), HostSettings::default(), stop_rx));
+
+    tokio::time::timeout(T, v.accepted.recv()).await.expect("accepted").unwrap();
+    let f = frame_matching(&mut v.frames, [224, 64, 32]).await;
+    assert_eq!((f.width, f.height), (320, 240));
+
+    // Screen changes propagate.
+    *color.lock().unwrap() = [0x30, 0xC0, 0x30, 0xFF];
+    frame_matching(&mut v.frames, [48, 192, 48]).await;
+
+    // Input travels to the host and pointer coordinates are scaled to its screen.
+    v.input.send(SessionMsg::PointerMove { x: POINTER_MAX, y: POINTER_MAX / 2 }).unwrap();
+    v.input.send(SessionMsg::PointerButton { button: 1, down: true }).unwrap();
+    v.input.send(SessionMsg::PointerButton { button: 1, down: false }).unwrap();
+    v.input.send(SessionMsg::Scroll { dx: 0, dy: -2 }).unwrap();
+    v.input.send(SessionMsg::Key { keysym: 0x61, down: true }).unwrap();
+    v.input.send(SessionMsg::Key { keysym: 0x61, down: false }).unwrap();
+    // A key left pressed when the viewer disconnects must be released on the host.
+    v.input.send(SessionMsg::Key { keysym: 0xffe1, down: true }).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    drop(v.input);
+    let end = tokio::time::timeout(T, v.task).await.unwrap().unwrap().unwrap();
+    assert!(matches!(end, SessionEnd::Closed));
+    let stats = tokio::time::timeout(T, host_task).await.unwrap().unwrap().unwrap();
+    drop(stop_tx);
+    assert!(stats.frames_sent >= 2);
+    assert_eq!(stats.input_events, 7);
+
+    let log = log.lock().unwrap().clone();
+    assert_eq!(
+        log,
+        vec![
+            SessionMsg::PointerMove { x: 1919, y: 539 },
+            SessionMsg::PointerButton { button: 1, down: true },
+            SessionMsg::PointerButton { button: 1, down: false },
+            SessionMsg::Scroll { dx: 0, dy: -2 },
+            SessionMsg::Key { keysym: 0x61, down: true },
+            SessionMsg::Key { keysym: 0x61, down: false },
+            SessionMsg::Key { keysym: 0xffe1, down: true },
+            SessionMsg::Key { keysym: 0xffe1, down: false }, // released automatically
+        ]
+    );
+
+    // The relay carried the whole session but never saw identifying plaintext: names and certs
+    // only travel inside the encrypted handshake.
+    let relayed = ts.relay_bytes.lock().unwrap().len();
+    assert!(relayed > 1000, "relay forwarded {relayed} bytes");
+    assert!(!ts.relay_contains(b"alice-marker-user"));
+    assert!(!ts.relay_contains(b"bob-desktop"));
+    assert!(!ts.relay_contains(&viewer_dev.creds.cert.signature));
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn host_can_reject() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let reason = "SECRET-REJECT-REASON-visible-only-to-peer";
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        let ch = session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap();
+        host::reject(ch, reason).await;
+    };
+    let (v, _) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
+    let end = tokio::time::timeout(T, v.task).await.unwrap().unwrap().unwrap();
+    assert!(matches!(end, SessionEnd::Rejected(r) if r == reason));
+    assert!(!ts.relay_contains(reason.as_bytes()));
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn host_stop_ends_viewer_session() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let cap = FakeCapturer { width: 64, height: 64, bgra: Arc::new(Mutex::new([0, 0, 0, 255])) };
+    let host_task = tokio::spawn(host::serve(
+        ch,
+        Box::new(cap),
+        Box::new(RecordingInjector::default()),
+        HostSettings::default(),
+        stop_rx,
+    ));
+    tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
+    tokio::time::timeout(T, v.frames.recv()).await.unwrap().unwrap();
+    stop_tx.send(true).unwrap();
+    host_task.await.unwrap().unwrap();
+    let end = tokio::time::timeout(T, v.task).await.expect("viewer notices the host leaving").unwrap().unwrap();
+    assert!(matches!(end, SessionEnd::Closed));
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn third_party_cannot_join_a_session() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let mallory = ts.signup("mallory", "correct horse battery", "evil").await;
+
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        // Mallory learns the session id somehow and races to join the relay first.
+        let (mut ms, mut mr) = mallory.conn.open_relay(sid).await.unwrap();
+        let _ = ms.write_all(b"garbage").await;
+        let mut buf = [0u8; 16];
+        let got = tokio::time::timeout(Duration::from_millis(500), mr.read(&mut buf)).await;
+        assert!(!matches!(got, Ok(Ok(Some(n))) if n > 0), "mallory must not receive session data");
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
+    let (_stop_tx, stop_rx) = watch::channel(false);
+    let cap = FakeCapturer { width: 64, height: 64, bgra: Arc::new(Mutex::new([0, 0, 255, 255])) };
+    tokio::spawn(host::serve(
+        ch,
+        Box::new(cap),
+        Box::new(RecordingInjector::default()),
+        HostSettings::default(),
+        stop_rx,
+    ));
+    tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
+    frame_matching(&mut v.frames, [255, 0, 0]).await;
+    ts.stop().await;
+}
+
+/// The real thing: capture an X server and inject into it (needs SOMEDESK_TEST_DISPLAY).
+#[tokio::test]
+async fn x11_host_end_to_end() {
+    let Ok(display) = std::env::var("SOMEDESK_TEST_DISPLAY") else {
+        eprintln!("SOMEDESK_TEST_DISPLAY not set, skipping");
+        return;
+    };
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ChangeWindowAttributesAux, ConnectionExt};
+    let (xc, screen) = x11rb::rust_connection::RustConnection::connect(Some(&display)).unwrap();
+    let root = xc.setup().roots[screen].root;
+    let (sw, sh) = (xc.setup().roots[screen].width_in_pixels as u32, xc.setup().roots[screen].height_in_pixels as u32);
+    xc.change_window_attributes(root, &ChangeWindowAttributesAux::new().background_pixel(0x00C8_3264)).unwrap();
+    xc.clear_area(false, root, 0, 0, 0, 0).unwrap();
+    xc.get_input_focus().unwrap().reply().unwrap();
+
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
+    let cap = somedesk_platform::linux::x11::X11Capturer::open(Some(&display)).unwrap();
+    let inj = somedesk_platform::linux::x11::X11Injector::open(Some(&display)).unwrap();
+    let (_stop_tx, stop_rx) = watch::channel(false);
+    tokio::spawn(host::serve(ch, Box::new(cap), Box::new(inj), HostSettings::default(), stop_rx));
+
+    tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
+    let f = frame_matching(&mut v.frames, [0xC8, 0x32, 0x64]).await;
+    assert_eq!((f.width, f.height), (sw & !1, sh & !1));
+
+    // Move the remote pointer to 25% / 75% of the screen.
+    v.input.send(SessionMsg::PointerMove { x: POINTER_MAX / 4, y: POINTER_MAX / 4 * 3 }).unwrap();
+    let want = ((sw - 1) / 4, (sh - 1) * 3 / 4);
+    let mut pos = (0, 0);
+    for _ in 0..50 {
+        let p = xc.query_pointer(root).unwrap().reply().unwrap();
+        pos = (p.root_x as u32, p.root_y as u32);
+        if pos.0.abs_diff(want.0) <= 1 && pos.1.abs_diff(want.1) <= 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(pos.0.abs_diff(want.0) <= 1 && pos.1.abs_diff(want.1) <= 1, "pointer at {pos:?}, wanted {want:?}");
+    ts.stop().await;
+}
