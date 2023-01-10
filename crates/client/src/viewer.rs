@@ -1,8 +1,10 @@
 //! Viewer side of a session: receive → decode → display, and forward local input.
 
+use crate::clipboard::ClipboardSync;
 use crate::session::Channel;
 use crate::{ClientError, Result};
 use somedesk_codec::{H264Decoder, RgbFrame};
+use somedesk_platform::Clipboard;
 use somedesk_proto::session::SessionMsg;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -33,8 +35,14 @@ pub enum SessionEnd {
 }
 
 /// Runs the viewer until the session ends. Input events to forward (pointer, keys, scroll) are
-/// read from `input`; dropping its sender ends the session.
-pub async fn run(ch: Channel, events: EventSink, mut input: mpsc::UnboundedReceiver<SessionMsg>) -> Result<SessionEnd> {
+/// read from `input`; dropping its sender ends the session. With a `clipboard`, clipboard text is
+/// shared in both directions, starting with what the viewer's clipboard holds now.
+pub async fn run(
+    ch: Channel,
+    events: EventSink,
+    mut input: mpsc::UnboundedReceiver<SessionMsg>,
+    clipboard: Option<Box<dyn Clipboard>>,
+) -> Result<SessionEnd> {
     let Channel { mut sender, mut receiver, .. } = ch;
 
     let first = tokio::time::timeout(ACCEPT_TIMEOUT, receiver.recv::<SessionMsg>())
@@ -56,6 +64,7 @@ pub async fn run(ch: Channel, events: EventSink, mut input: mpsc::UnboundedRecei
             .spawn(move || decode_loop(video_rx, events, ctrl_tx))
             .expect("spawn decoder thread")
     };
+    let clipboard = clipboard.map(|c| ClipboardSync::start(c, ctrl_tx.clone(), true));
 
     let start = Instant::now();
     let send_loop = async {
@@ -88,6 +97,11 @@ pub async fn run(ch: Channel, events: EventSink, mut input: mpsc::UnboundedRecei
                 Some(SessionMsg::Ping { t }) => {
                     let _ = ctrl_tx.send(SessionMsg::Pong { t });
                 }
+                Some(SessionMsg::Clipboard { text }) => {
+                    if let Some(c) = &clipboard {
+                        c.apply(text);
+                    }
+                }
                 Some(other) => tracing::debug!("ignoring unexpected message from host: {other:?}"),
             }
         }
@@ -99,7 +113,14 @@ pub async fn run(ch: Channel, events: EventSink, mut input: mpsc::UnboundedRecei
     let _ = sender.send(&SessionMsg::Bye).await;
     let _ = sender.into_inner().finish();
     drop(video_tx);
-    let _ = tokio::task::spawn_blocking(move || decoder.join()).await;
+    let clipboard = clipboard.map(ClipboardSync::stop);
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = decoder.join();
+        if let Some(c) = clipboard {
+            let _ = c.join();
+        }
+    })
+    .await;
     result.map(|_| SessionEnd::Closed)
 }
 

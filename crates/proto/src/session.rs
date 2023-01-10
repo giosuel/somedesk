@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 /// Maximum value of a normalized pointer coordinate.
 pub const POINTER_MAX: u16 = u16::MAX;
 
+/// Clipboard text larger than this (in bytes) is not shared.
+pub const MAX_CLIPBOARD_TEXT: usize = 1 << 20;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionMsg {
     /// Host → viewer: the user at the host accepted the connection.
@@ -45,6 +48,11 @@ pub enum SessionMsg {
     Key {
         keysym: u32,
         down: bool,
+    },
+    /// Either side: the local clipboard now holds this text (at most [`MAX_CLIPBOARD_TEXT`]
+    /// bytes).
+    Clipboard {
+        text: String,
     },
     /// Viewer → host: the decoder lost sync, please send an IDR frame.
     RequestKeyframe,

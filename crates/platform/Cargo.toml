@@ -1,6 +1,6 @@
 [package]
 name = "somedesk-platform"
-description = "Screen capture and input injection backends for SomeDesk"
+description = "Screen capture, input injection and clipboard backends for SomeDesk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 tracing.workspace = true
+# Cross-platform; on Linux it speaks both X11 selections and the Wayland data-control protocol.
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["xtest"] }
