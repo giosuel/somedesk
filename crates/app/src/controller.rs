@@ -30,12 +30,24 @@ const PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Slint reports one mouse-wheel notch as 60 logical pixels.
 const WHEEL_STEP: f32 = 60.0;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Settings {
     #[serde(default)]
     auto_accept_own_devices: bool,
+    #[serde(default = "yes")]
+    share_clipboard: bool,
     #[serde(default)]
     last_server: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { auto_accept_own_devices: false, share_clipboard: true, last_server: String::new() }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Default)]
@@ -170,11 +182,13 @@ impl Controller {
             .or_else(|| (!settings.last_server.is_empty()).then(|| settings.last_server.clone()))
             .unwrap_or_else(|| "localhost".into());
         let auto_accept = settings.auto_accept_own_devices;
+        let share_clipboard = settings.share_clipboard;
         self.0.state.lock().unwrap().settings = settings;
         self.ui(move |ui| {
             ui.set_login_server(server.into());
             ui.set_login_device_name(hostname().into());
             ui.set_auto_accept(auto_accept);
+            ui.set_share_clipboard(share_clipboard);
         });
         match DeviceCredentials::load(&self.creds_path()) {
             Ok(Some(creds)) => self.go_online(creds),
@@ -207,6 +221,11 @@ impl Controller {
         let c = self.clone();
         ui.on_auto_accept_changed(move |v| {
             c.0.state.lock().unwrap().settings.auto_accept_own_devices = v;
+            c.save_settings();
+        });
+        let c = self.clone();
+        ui.on_share_clipboard_changed(move |v| {
+            c.0.state.lock().unwrap().settings.share_clipboard = v;
             c.save_settings();
         });
         let c = self.clone();
@@ -501,7 +520,8 @@ impl Controller {
             ui.set_hosting_peer(shown.into());
             ui.set_hosting_active(true);
         });
-        let result = host::serve(ch, capturer, injector, HostSettings::default(), stop_rx).await;
+        let clipboard = self.clipboard();
+        let result = host::serve(ch, capturer, injector, clipboard, HostSettings::default(), stop_rx).await;
         self.0.state.lock().unwrap().host_stop = None;
         self.0.busy.store(false, Ordering::SeqCst);
         self.ui(|ui| ui.set_hosting_active(false));
@@ -632,7 +652,17 @@ impl Controller {
                 this.show_frame(frame);
             }
         });
-        viewer::run(ch, sink, input_rx).await
+        viewer::run(ch, sink, input_rx, self.clipboard()).await
+    }
+
+    /// The system clipboard, if clipboard sharing is enabled and the clipboard is available.
+    fn clipboard(&self) -> Option<Box<dyn somedesk_platform::Clipboard>> {
+        if !self.0.state.lock().unwrap().settings.share_clipboard {
+            return None;
+        }
+        somedesk_platform::default_clipboard()
+            .inspect_err(|e| tracing::warn!("clipboard sharing unavailable: {e:#}"))
+            .ok()
     }
 
     fn show_frame(&self, frame: RgbFrame) {

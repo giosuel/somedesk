@@ -3,8 +3,8 @@
 Self-hosted remote desktop (in the spirit of AnyDesk/TeamViewer) written in Rust, with
 end-to-end encrypted sessions and zero-knowledge password login.
 
-**Status:** first milestone. Linux (X11) ↔ Linux remote control works end to end through the
-relay. Wayland, Windows and macOS backends, clipboard, file transfer and P2P are next.
+**Status:** Linux (X11) ↔ Linux remote control with clipboard sharing works end to end through
+the relay. Wayland, Windows and macOS backends, file transfer and P2P are next.
 
 ## Architecture
 
@@ -43,13 +43,16 @@ relay. Wayland, Windows and macOS backends, clipboard, file transfer and P2P are
 * **Interception check:** both sides display identity fingerprints. Connections from your own
   account are marked as verified; the host must accept every connection unless
   “unattended access for my own devices” is enabled.
+* **Clipboard:** text is shared inside the encrypted session in both directions (switchable in
+  the app). The host's clipboard is only sent after someone copies something during the
+  session, never what it held before.
 * **What the server does see:** who connects to whom, when, and how much data flows.
 * **Lost password = lost identity key** (by design). A recovery key is planned.
 
 ## Building and running
 
 Requirements (Debian/Ubuntu): `build-essential pkg-config libfontconfig1-dev libxkbcommon-dev
-libxkbcommon-x11-dev libxcb1-dev libx11-dev postgresql`.
+libxkbcommon-x11-dev libxcb1-dev libx11-dev postgresql` (tests: `xvfb xsel`).
 
 ```sh
 cargo build --release
@@ -70,7 +73,7 @@ target/release/somedesk --server your.server.example
 scripts/test.sh          # everything: unit tests, X11 tests on a private Xvfb, server + E2E tests
 ```
 
-Database tests need `SOMEDESK_TEST_DATABASE_URL` (an admin connection used to create throwaway
+The clipboard test also needs `xsel`. Database tests need `SOMEDESK_TEST_DATABASE_URL` (an admin connection used to create throwaway
 databases; `scripts/test.sh` defaults to the local dev role). X11 tests need `Xvfb`.
 
 `scripts/demo-env.sh` starts a server and two virtual displays for manual testing.

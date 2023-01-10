@@ -3,7 +3,7 @@
 use rand::Rng;
 use somedesk_client::credentials::DeviceCredentials;
 use somedesk_client::server::ServerConn;
-use somedesk_platform::{Capturer, Frame, Injector};
+use somedesk_platform::{Capturer, Clipboard, Frame, Injector};
 use somedesk_proto::control::Event;
 use somedesk_proto::session::SessionMsg;
 use somedesk_server::{RunningServer, ServerConfig};
@@ -150,6 +150,65 @@ impl Injector for RecordingInjector {
     }
     fn key(&mut self, keysym: u32, down: bool) -> anyhow::Result<()> {
         self.log.lock().unwrap().push(SessionMsg::Key { keysym, down });
+        Ok(())
+    }
+}
+
+/// An in-memory clipboard. Clones share the same contents.
+#[derive(Clone, Default)]
+pub struct FakeClipboard {
+    state: Arc<Mutex<FakeClipboardState>>,
+}
+
+#[derive(Default)]
+struct FakeClipboardState {
+    text: Option<String>,
+    /// Every text written by the code under test, oldest first.
+    written: Vec<String>,
+}
+
+impl FakeClipboard {
+    pub fn with_text(text: &str) -> Self {
+        let c = Self::default();
+        c.set(text);
+        c
+    }
+
+    /// Simulates the local user copying something.
+    pub fn set(&self, text: &str) {
+        self.state.lock().unwrap().text = Some(text.to_owned());
+    }
+
+    pub fn get(&self) -> Option<String> {
+        self.state.lock().unwrap().text.clone()
+    }
+
+    /// How many times the code under test wrote to this clipboard.
+    pub fn writes(&self) -> usize {
+        self.state.lock().unwrap().written.len()
+    }
+
+    pub fn history(&self) -> Vec<String> {
+        self.state.lock().unwrap().written.clone()
+    }
+
+    pub async fn wait_for(&self, text: &str, timeout: std::time::Duration) {
+        let deadline = tokio::time::Instant::now() + timeout;
+        while self.get().as_deref() != Some(text) {
+            assert!(tokio::time::Instant::now() < deadline, "clipboard never became {text:?}, is {:?}", self.get());
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+}
+
+impl Clipboard for FakeClipboard {
+    fn get_text(&mut self) -> anyhow::Result<Option<String>> {
+        Ok(self.get())
+    }
+    fn set_text(&mut self, text: &str) -> anyhow::Result<()> {
+        let mut s = self.state.lock().unwrap();
+        s.text = Some(text.to_owned());
+        s.written.push(text.to_owned());
         Ok(())
     }
 }

@@ -44,8 +44,10 @@ export component AppWindow inherits Window {
     in property <bool> connect-busy;
     in-out property <string> connect-id;
     in-out property <bool> auto-accept;
+    in-out property <bool> share-clipboard;
     callback connect(string);
     callback auto-accept-changed(bool);
+    callback share-clipboard-changed(bool);
     callback sign-out();
 
     // Hosting
@@ -119,10 +121,12 @@ export component AppWindow inherits Window {
         connect-busy: root.connect-busy;
         connect-id <=> root.connect-id;
         auto-accept <=> root.auto-accept;
+        share-clipboard <=> root.share-clipboard;
         hosting-active: root.hosting-active;
         hosting-peer: root.hosting-peer;
         connect(id) => { root.connect(id); }
         auto-accept-changed(v) => { root.auto-accept-changed(v); }
+        share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
         sign-out => { root.sign-out(); }
         stop-hosting => { root.stop-hosting(); }
     }

@@ -1,8 +1,9 @@
-//! Platform backends: screen capture and input injection.
+//! Platform backends: screen capture, input injection and the clipboard.
 //!
-//! Backends implement [`Capturer`] and [`Injector`]. Currently: Linux/X11. Wayland (via the
+//! Backends implement [`Capturer`], [`Injector`] and [`Clipboard`]. Currently: Linux/X11. Wayland (via the
 //! xdg-desktop-portal), Windows and macOS plug in behind the same traits later.
 
+pub mod clipboard;
 #[cfg(target_os = "linux")]
 pub mod linux;
 
@@ -30,6 +31,17 @@ pub trait Injector: Send {
     fn scroll(&mut self, dx: i32, dy: i32) -> anyhow::Result<()>;
     /// Presses or releases the key producing X11 keysym `keysym`.
     fn key(&mut self, keysym: u32, down: bool) -> anyhow::Result<()>;
+}
+
+pub trait Clipboard: Send {
+    /// Current clipboard text, or `None` if the clipboard is empty or holds something else.
+    fn get_text(&mut self) -> anyhow::Result<Option<String>>;
+    fn set_text(&mut self, text: &str) -> anyhow::Result<()>;
+}
+
+/// Opens the system clipboard.
+pub fn default_clipboard() -> anyhow::Result<Box<dyn Clipboard>> {
+    Ok(Box::new(clipboard::SystemClipboard::open()?))
 }
 
 /// Opens the default capturer for this machine.

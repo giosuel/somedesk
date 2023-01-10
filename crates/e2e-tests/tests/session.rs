@@ -4,7 +4,8 @@ use somedesk_client::host::{self, HostSettings};
 use somedesk_client::session;
 use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
 use somedesk_codec::RgbFrame;
-use somedesk_e2e_tests::{Device, FakeCapturer, RecordingInjector, TestServer};
+use somedesk_e2e_tests::{Device, FakeCapturer, FakeClipboard, RecordingInjector, TestServer};
+use somedesk_platform::Clipboard;
 use somedesk_proto::control::Event;
 use somedesk_proto::session::{SessionMsg, POINTER_MAX};
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,10 @@ struct ViewerSide {
 }
 
 async fn start_viewer(viewer: &Device, host_id: u64) -> ViewerSide {
+    start_viewer_with(viewer, host_id, None).await
+}
+
+async fn start_viewer_with(viewer: &Device, host_id: u64, clipboard: Option<Box<dyn Clipboard>>) -> ViewerSide {
     let (ch, host_info) = session::connect(&viewer.conn, &viewer.creds, host_id).await.expect("viewer handshake");
     assert_eq!(ch.peer.device_pk, host_info.cert.device_pk);
     let (input, input_rx) = mpsc::unbounded_channel();
@@ -35,7 +40,7 @@ async fn start_viewer(viewer: &Device, host_id: u64) -> ViewerSide {
         }
         _ => {}
     });
-    let task = tokio::spawn(viewer::run(ch, sink, input_rx));
+    let task = tokio::spawn(viewer::run(ch, sink, input_rx, clipboard));
     ViewerSide { input, frames, accepted, task }
 }
 
@@ -93,7 +98,7 @@ async fn remote_control_session_end_to_end() {
     let (stop_tx, stop_rx) = watch::channel(false);
     let cap = FakeCapturer { width: 320, height: 240, bgra: color.clone() };
     let host_task =
-        tokio::spawn(host::serve(host_ch, Box::new(cap), Box::new(injector), HostSettings::default(), stop_rx));
+        tokio::spawn(host::serve(host_ch, Box::new(cap), Box::new(injector), None, HostSettings::default(), stop_rx));
 
     tokio::time::timeout(T, v.accepted.recv()).await.expect("accepted").unwrap();
     let f = frame_matching(&mut v.frames, [224, 64, 32]).await;
@@ -187,6 +192,7 @@ async fn host_stop_ends_viewer_session() {
         ch,
         Box::new(cap),
         Box::new(RecordingInjector::default()),
+        None,
         HostSettings::default(),
         stop_rx,
     ));
@@ -226,11 +232,66 @@ async fn third_party_cannot_join_a_session() {
         ch,
         Box::new(cap),
         Box::new(RecordingInjector::default()),
+        None,
         HostSettings::default(),
         stop_rx,
     ));
     tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
     frame_matching(&mut v.frames, [255, 0, 0]).await;
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn clipboard_is_shared_both_ways() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+
+    let viewer_clip = FakeClipboard::with_text("VIEWER-COPIED-sudo apt upgrade");
+    let host_clip = FakeClipboard::with_text("HOST-PRIVATE-clipboard-before-session");
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let (mut v, ch) =
+        tokio::join!(start_viewer_with(&viewer_dev, host_id, Some(Box::new(viewer_clip.clone()))), host_side);
+    let (_stop_tx, stop_rx) = watch::channel(false);
+    let cap = FakeCapturer { width: 64, height: 64, bgra: Arc::new(Mutex::new([0, 0, 0, 255])) };
+    let host_task = tokio::spawn(host::serve(
+        ch,
+        Box::new(cap),
+        Box::new(RecordingInjector::default()),
+        Some(Box::new(host_clip.clone())),
+        HostSettings::default(),
+        stop_rx,
+    ));
+    tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
+
+    // What the viewer had copied before connecting becomes pasteable on the host.
+    host_clip.wait_for("VIEWER-COPIED-sudo apt upgrade", T).await;
+    // Copying on the host makes it pasteable on the viewer...
+    host_clip.set("HOST-COPIED-error log line ✓");
+    viewer_clip.wait_for("HOST-COPIED-error log line ✓", T).await;
+    // ...and back again.
+    viewer_clip.set("VIEWER-COPIED-again");
+    host_clip.wait_for("VIEWER-COPIED-again", T).await;
+
+    // Text applied from the peer is not echoed back: each side was written exactly as often as
+    // the other side copied something.
+    tokio::time::sleep(somedesk_client::clipboard::POLL_INTERVAL * 4).await;
+    assert_eq!(host_clip.writes(), 2);
+    assert_eq!(viewer_clip.writes(), 1);
+    // The host's clipboard from before the session was never shared.
+    assert!(!viewer_clip.history().iter().any(|t| t.contains("HOST-PRIVATE")));
+
+    drop(v.input);
+    tokio::time::timeout(T, v.task).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(T, host_task).await.unwrap().unwrap().unwrap();
+    assert!(!ts.relay_contains(b"VIEWER-COPIED"));
+    assert!(!ts.relay_contains(b"HOST-COPIED"));
     ts.stop().await;
 }
 
@@ -265,7 +326,7 @@ async fn x11_host_end_to_end() {
     let cap = somedesk_platform::linux::x11::X11Capturer::open(Some(&display)).unwrap();
     let inj = somedesk_platform::linux::x11::X11Injector::open(Some(&display)).unwrap();
     let (_stop_tx, stop_rx) = watch::channel(false);
-    tokio::spawn(host::serve(ch, Box::new(cap), Box::new(inj), HostSettings::default(), stop_rx));
+    tokio::spawn(host::serve(ch, Box::new(cap), Box::new(inj), None, HostSettings::default(), stop_rx));
 
     tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
     let f = frame_matching(&mut v.frames, [0xC8, 0x32, 0x64]).await;

@@ -1,9 +1,10 @@
 //! Host side of a session: capture → encode → send, and receive → inject.
 
+use crate::clipboard::ClipboardSync;
 use crate::session::Channel;
 use crate::{ClientError, Result};
 use somedesk_codec::{EncoderSettings, H264Encoder};
-use somedesk_platform::{Capturer, Injector};
+use somedesk_platform::{Capturer, Clipboard, Injector};
 use somedesk_proto::session::{SessionMsg, POINTER_MAX};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -43,11 +44,12 @@ pub async fn reject(ch: Channel, reason: &str) {
 }
 
 /// Accepts the session and serves it until the viewer leaves, an error occurs, or `stop`
-/// becomes `true`.
+/// becomes `true`. With a `clipboard`, clipboard text is shared in both directions.
 pub async fn serve(
     ch: Channel,
     capturer: Box<dyn Capturer>,
     injector: Box<dyn Injector>,
+    clipboard: Option<Box<dyn Clipboard>>,
     settings: HostSettings,
     mut stop: watch::Receiver<bool>,
 ) -> Result<HostStats> {
@@ -72,6 +74,8 @@ pub async fn serve(
         .name("somedesk-inject".into())
         .spawn(move || inject_loop(injector, input_rx))
         .expect("spawn inject thread");
+    // The host's existing clipboard is only shared once the user there copies something new.
+    let clipboard = clipboard.map(|c| ClipboardSync::start(c, ctrl_tx.clone(), false));
 
     let mut stats = HostStats::default();
     let send_loop = async {
@@ -108,6 +112,11 @@ pub async fn serve(
                     input_events += 1;
                     let _ = input_tx.send(m);
                 }
+                Some(SessionMsg::Clipboard { text }) => {
+                    if let Some(c) = &clipboard {
+                        c.apply(text);
+                    }
+                }
                 Some(other) => {
                     tracing::debug!("ignoring unexpected message from viewer: {other:?}")
                 }
@@ -126,9 +135,13 @@ pub async fn serve(
     // `blocking_send`, and the inject thread exits when its input channel closes.
     drop(video_rx);
     drop(input_tx);
+    let clipboard = clipboard.map(ClipboardSync::stop);
     let _ = tokio::task::spawn_blocking(move || {
         let _ = capture.join();
         let _ = inject.join();
+        if let Some(c) = clipboard {
+            let _ = c.join();
+        }
     })
     .await;
     stats.input_events = input_events;

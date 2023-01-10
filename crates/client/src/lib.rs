@@ -4,7 +4,9 @@
 //! * [`credentials`] — what a device persists after enrollment.
 //! * [`session`] — establishing the end-to-end encrypted channel to a peer device.
 //! * [`host`] / [`viewer`] — the two ends of a remote-control session.
+//! * [`clipboard`] — clipboard sharing within a session.
 
+pub mod clipboard;
 pub mod credentials;
 pub mod host;
 pub mod server;

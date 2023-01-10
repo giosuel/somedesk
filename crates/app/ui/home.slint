@@ -84,10 +84,12 @@ export component HomePage inherits Rectangle {
     in property <bool> connect-busy;
     in-out property <string> connect-id;
     in-out property <bool> auto-accept;
+    in-out property <bool> share-clipboard;
     in property <bool> hosting-active;
     in property <string> hosting-peer;
     callback connect(string);
     callback auto-accept-changed(bool);
+    callback share-clipboard-changed(bool);
     callback sign-out();
     callback stop-hosting();
     background: Theme.bg;
@@ -225,6 +227,24 @@ export component HomePage inherits Rectangle {
                                 y: (parent.height - self.height) / 2;
                                 checked <=> root.auto-accept;
                                 toggled(v) => { root.auto-accept-changed(v); }
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 12px;
+                            VerticalLayout {
+                                spacing: 3px;
+                                Text { text: "Share clipboard"; color: Theme.text; font-size: 13px; font-weight: 600; }
+                                Text {
+                                    text: "Copy on one computer, paste on the other during a session.";
+                                    color: Theme.subtle;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                            Switch {
+                                y: (parent.height - self.height) / 2;
+                                checked <=> root.share-clipboard;
+                                toggled(v) => { root.share-clipboard-changed(v); }
                             }
                         }
                     }
