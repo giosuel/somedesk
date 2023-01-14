@@ -57,7 +57,7 @@ export component PrimaryButton inherits Rectangle {
     border-radius: 10px;
     background: !root.enabled ? Theme.card-hover : root.danger ? Theme.danger : Theme.accent-gradient;
     drop-shadow-blur: root.enabled && !root.danger ? 16px : 0px;
-    drop-shadow-color: #6d5dfc40;
+    drop-shadow-color: root.enabled && !root.danger ? #6d5dfc40 : transparent;
     drop-shadow-offset-y: 4px;
     Rectangle {
         border-radius: parent.border-radius;
@@ -285,4 +285,42 @@ export component Spinner inherits HorizontalLayout {
 export component Divider inherits Rectangle {
     height: 1px;
     background: Theme.border;
+}
+
+export component Checkbox inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+    min-height: row.min-height;
+    preferred-height: row.preferred-height;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.checked = !root.checked; }
+    }
+    row := HorizontalLayout {
+        spacing: 10px;
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 5px;
+            background: root.checked ? Theme.accent : Theme.input-bg;
+            border-width: root.checked ? 0px : 1px;
+            border-color: ta.has-hover ? Theme.muted : Theme.border-strong;
+            animate background { duration: 120ms; }
+            if root.checked: Icon { d: "M5 12 L10 17 L19 7"; color: white; size: 14px; stroke: 2.6px; }
+        }
+        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; wrap: word-wrap; }
+    }
+}
+
+/// Clickable accent-colored text.
+export component LinkText inherits Text {
+    callback clicked;
+    color: lta.has-hover ? #b9b1ff : #9d92ff;
+    font-size: 12px;
+    font-weight: 600;
+    lta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 }

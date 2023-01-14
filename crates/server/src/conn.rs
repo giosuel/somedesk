@@ -4,6 +4,7 @@ use crate::{db, relay, Online, Shared};
 use sha2::{Digest, Sha256};
 use somedesk_crypto::keys::verify_device_cert;
 use somedesk_crypto::opaque::{self, ServerLoginState};
+use somedesk_crypto::recovery;
 use somedesk_proto::control::*;
 use somedesk_proto::frame::{read_msg, write_msg};
 use std::net::IpAddr;
@@ -18,10 +19,36 @@ const MAX_DEVICE_NAME: usize = 64;
 
 enum AuthState {
     Anonymous,
-    Registering { username: String },
-    LoggingIn { username: String, user: Option<Box<db::UserRow>>, st: Box<ServerLoginState> },
-    User { user_id: i64, username: String, identity_pk: [u8; 32] },
-    Device { user_id: i64, username: String, device_id: u64 },
+    Registering {
+        username: String,
+    },
+    LoggingIn {
+        username: String,
+        user: Option<Box<db::UserRow>>,
+        st: Box<ServerLoginState>,
+    },
+    /// Password reset: challenge sent, waiting for the recovery-key proof.
+    Recovering {
+        username: String,
+        user: Option<Box<db::UserRow>>,
+        challenge: [u8; 32],
+    },
+    /// Password reset: recovery key proven, waiting for the new password record.
+    RecoveryProven {
+        user_id: i64,
+        username: String,
+        identity_pk: [u8; 32],
+    },
+    User {
+        user_id: i64,
+        username: String,
+        identity_pk: [u8; 32],
+    },
+    Device {
+        user_id: i64,
+        username: String,
+        device_id: u64,
+    },
 }
 
 struct Ctx {
@@ -106,6 +133,14 @@ fn normalize_username(name: &str) -> Result<String, ErrorInfo> {
         .ok_or_else(|| err(ErrorCode::BadRequest, "username must be 3-32 characters: a-z, 0-9, '.', '_' or '-'"))
 }
 
+/// Rejects implausibly large key bundles (a sealed Ed25519 key is 48 bytes).
+fn check_bundle(bundle: &EncryptedKeyBundle) -> Result<(), ErrorInfo> {
+    if bundle.ciphertext.len() > 256 {
+        return Err(err(ErrorCode::BadRequest, "key bundle too large"));
+    }
+    Ok(())
+}
+
 fn token_hash(token: &[u8; 32]) -> Vec<u8> {
     Sha256::digest(token).to_vec()
 }
@@ -160,17 +195,19 @@ impl Ctx {
                 Ok(Response::RegisterStart { message: reply })
             }
 
-            Request::RegisterFinish { message, identity_pk, key_bundle } => {
+            Request::RegisterFinish { message, identity_pk, key_bundle, recovery } => {
                 let AuthState::Registering { username } = std::mem::replace(&mut self.state, AuthState::Anonymous)
                 else {
                     return Err(err(ErrorCode::BadRequest, "registration not started"));
                 };
-                if key_bundle.ciphertext.len() > 256 {
-                    return Err(err(ErrorCode::BadRequest, "key bundle too large"));
-                }
+                check_bundle(&key_bundle)?;
+                check_bundle(&recovery.key_bundle)?;
                 let file = opaque::server_register_finish(&message)
                     .map_err(|_| err(ErrorCode::BadRequest, "malformed registration upload"))?;
-                match db::create_user(&db, &username, &file, &identity_pk, &key_bundle).await.map_err(internal)? {
+                match db::create_user(&db, &username, &file, &identity_pk, &key_bundle, &recovery)
+                    .await
+                    .map_err(internal)?
+                {
                     Some(user_id) => {
                         db::audit(&db, Some(user_id), None, "register", None).await;
                         Ok(Response::Ok)
@@ -207,7 +244,73 @@ impl Ctx {
                 };
                 db::audit(&db, Some(user.id), None, "login", Some(&self.ip.to_string())).await;
                 self.state = AuthState::User { user_id: user.id, username, identity_pk: user.identity_pk };
-                Ok(Response::LoginFinish { identity_pk: user.identity_pk, key_bundle: user.key_bundle })
+                Ok(Response::LoginFinish {
+                    identity_pk: user.identity_pk,
+                    has_recovery: user.recovery.is_some(),
+                    key_bundle: user.key_bundle,
+                })
+            }
+
+            Request::SetRecovery { recovery } => {
+                let AuthState::User { user_id, .. } = &self.state else {
+                    return Err(err(ErrorCode::NotAuthenticated, "log in with your password first"));
+                };
+                check_bundle(&recovery.key_bundle)?;
+                db::set_recovery(&db, *user_id, &recovery).await.map_err(internal)?;
+                db::audit(&db, Some(*user_id), None, "recovery_key_set", None).await;
+                Ok(Response::Ok)
+            }
+
+            Request::RecoveryStart { username } => {
+                // Unknown users get a challenge too and fail at the next step exactly like a wrong
+                // recovery key, so this does not reveal which usernames exist.
+                let username = normalize_username(&username).unwrap_or_default();
+                self.limit("recover", &username)?;
+                let user =
+                    if username.is_empty() { None } else { db::get_user(&db, &username).await.map_err(internal)? };
+                let mut challenge = [0u8; 32];
+                rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut challenge);
+                self.state = AuthState::Recovering { username, user: user.map(Box::new), challenge };
+                Ok(Response::RecoveryChallenge { challenge })
+            }
+
+            Request::RecoveryProve { proof, message } => {
+                let AuthState::Recovering { username, user, challenge } =
+                    std::mem::replace(&mut self.state, AuthState::Anonymous)
+                else {
+                    return Err(err(ErrorCode::BadRequest, "recovery not started"));
+                };
+                let proven = user.filter(|u| {
+                    u.recovery
+                        .as_ref()
+                        .is_some_and(|r| recovery::verify_proof(&r.recovery_pk, &username, &challenge, &proof).is_ok())
+                });
+                let Some(user) = proven else {
+                    tracing::info!(%username, ip = %self.ip, "failed recovery attempt");
+                    return Err(err(ErrorCode::AuthFailed, "wrong username or recovery key"));
+                };
+                let reply = opaque::server_register_start(&self.shared.opaque, &username, &message)
+                    .map_err(|_| err(ErrorCode::BadRequest, "malformed registration request"))?;
+                let recovery_bundle = user.recovery.expect("checked above").key_bundle;
+                self.state = AuthState::RecoveryProven { user_id: user.id, username, identity_pk: user.identity_pk };
+                Ok(Response::RecoveryProve { identity_pk: user.identity_pk, recovery_bundle, message: reply })
+            }
+
+            Request::RecoveryFinish { message, key_bundle, recovery } => {
+                let AuthState::RecoveryProven { user_id, username, identity_pk } =
+                    std::mem::replace(&mut self.state, AuthState::Anonymous)
+                else {
+                    return Err(err(ErrorCode::BadRequest, "recovery not proven"));
+                };
+                check_bundle(&key_bundle)?;
+                check_bundle(&recovery.key_bundle)?;
+                let file = opaque::server_register_finish(&message)
+                    .map_err(|_| err(ErrorCode::BadRequest, "malformed registration upload"))?;
+                db::reset_password(&db, user_id, &file, &key_bundle, &recovery).await.map_err(internal)?;
+                db::audit(&db, Some(user_id), None, "password_reset", Some(&self.ip.to_string())).await;
+                tracing::info!(%username, "password reset with recovery key");
+                self.state = AuthState::User { user_id, username, identity_pk };
+                Ok(Response::Ok)
             }
 
             Request::RegisterDevice { cert } => {
