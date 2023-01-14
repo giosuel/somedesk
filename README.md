@@ -3,8 +3,8 @@
 Self-hosted remote desktop (in the spirit of AnyDesk/TeamViewer) written in Rust, with
 end-to-end encrypted sessions and zero-knowledge password login.
 
-**Status:** Linux (X11) ↔ Linux remote control with clipboard sharing works end to end through
-the relay. Wayland, Windows and macOS backends, file transfer and P2P are next.
+**Status:** Linux (X11) ↔ Linux remote control with clipboard sharing and password recovery works
+end to end through the relay. Wayland, Windows and macOS backends, file transfer and P2P are next.
 
 ## Architecture
 
@@ -47,7 +47,13 @@ the relay. Wayland, Windows and macOS backends, file transfer and P2P are next.
   the app). The host's clipboard is only sent after someone copies something during the
   session, never what it held before.
 * **What the server does see:** who connects to whom, when, and how much data flows.
-* **Lost password = lost identity key** (by design). A recovery key is planned.
+* **Recovery key:** a second copy of the identity key is sealed under a 160-bit recovery key that
+  is shown once at sign-up (`XXXX-XXXX-…`, with a checksum that catches typos). To reset a
+  forgotten password, the client proves it holds the recovery key by signing a server challenge
+  with a key derived from it, opens the recovery copy and re-seals it under the new password.
+  The server can't open either copy or reset a password without the key. Recovery keys are
+  single-use: a reset issues a new one. Without the password *and* the recovery key, the identity
+  is lost by design.
 
 ## Building and running
 

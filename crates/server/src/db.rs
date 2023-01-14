@@ -2,7 +2,7 @@
 
 use rand::Rng;
 use somedesk_crypto::opaque::ServerSetup;
-use somedesk_proto::control::{DeviceCert, EncryptedKeyBundle};
+use somedesk_proto::control::{DeviceCert, EncryptedKeyBundle, RecoverySetup};
 use somedesk_proto::{DEVICE_ID_MAX, DEVICE_ID_MIN};
 use sqlx::{PgPool, Row};
 
@@ -29,22 +29,36 @@ pub struct UserRow {
     pub password_file: Vec<u8>,
     pub identity_pk: [u8; 32],
     pub key_bundle: EncryptedKeyBundle,
+    pub recovery: Option<RecoverySetup>,
 }
 
 pub async fn get_user(pool: &PgPool, username: &str) -> anyhow::Result<Option<UserRow>> {
-    let row = sqlx::query("SELECT id, username, password_file, identity_pk, key_bundle FROM users WHERE username = $1")
-        .bind(username)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT id, username, password_file, identity_pk, key_bundle, recovery_pk, recovery_bundle
+         FROM users WHERE username = $1",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
     row.map(|r| {
         let pk: Vec<u8> = r.get("identity_pk");
         let bundle: Vec<u8> = r.get("key_bundle");
+        let recovery_pk: Option<Vec<u8>> = r.get("recovery_pk");
+        let recovery_bundle: Option<Vec<u8>> = r.get("recovery_bundle");
+        let recovery = match (recovery_pk, recovery_bundle) {
+            (Some(pk), Some(bundle)) => Some(RecoverySetup {
+                recovery_pk: pk.try_into().map_err(|_| anyhow::anyhow!("corrupt recovery_pk"))?,
+                key_bundle: postcard::from_bytes(&bundle)?,
+            }),
+            _ => None,
+        };
         Ok(UserRow {
             id: r.get("id"),
             username: r.get("username"),
             password_file: r.get("password_file"),
             identity_pk: pk.try_into().map_err(|_| anyhow::anyhow!("corrupt identity_pk"))?,
             key_bundle: postcard::from_bytes(&bundle)?,
+            recovery,
         })
     })
     .transpose()
@@ -57,17 +71,53 @@ pub async fn create_user(
     password_file: &[u8],
     identity_pk: &[u8; 32],
     bundle: &EncryptedKeyBundle,
+    recovery: &RecoverySetup,
 ) -> anyhow::Result<Option<i64>> {
     Ok(sqlx::query_scalar(
-        "INSERT INTO users (username, password_file, identity_pk, key_bundle) VALUES ($1, $2, $3, $4)
+        "INSERT INTO users (username, password_file, identity_pk, key_bundle, recovery_pk, recovery_bundle)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (username) DO NOTHING RETURNING id",
     )
     .bind(username)
     .bind(password_file)
     .bind(identity_pk.as_slice())
     .bind(postcard::to_stdvec(bundle)?)
+    .bind(recovery.recovery_pk.as_slice())
+    .bind(postcard::to_stdvec(&recovery.key_bundle)?)
     .fetch_optional(pool)
     .await?)
+}
+
+pub async fn set_recovery(pool: &PgPool, user_id: i64, recovery: &RecoverySetup) -> anyhow::Result<()> {
+    sqlx::query("UPDATE users SET recovery_pk = $2, recovery_bundle = $3 WHERE id = $1")
+        .bind(user_id)
+        .bind(recovery.recovery_pk.as_slice())
+        .bind(postcard::to_stdvec(&recovery.key_bundle)?)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Replaces the password (OPAQUE record and password-sealed bundle) and the recovery key in one
+/// step, so a reset never leaves the account half-updated.
+pub async fn reset_password(
+    pool: &PgPool,
+    user_id: i64,
+    password_file: &[u8],
+    bundle: &EncryptedKeyBundle,
+    recovery: &RecoverySetup,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE users SET password_file = $2, key_bundle = $3, recovery_pk = $4, recovery_bundle = $5 WHERE id = $1",
+    )
+    .bind(user_id)
+    .bind(password_file)
+    .bind(postcard::to_stdvec(bundle)?)
+    .bind(recovery.recovery_pk.as_slice())
+    .bind(postcard::to_stdvec(&recovery.key_bundle)?)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn user_exists(pool: &PgPool, username: &str) -> anyhow::Result<bool> {

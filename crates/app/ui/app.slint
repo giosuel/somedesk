@@ -2,7 +2,7 @@ import { Theme } from "theme.slint";
 import { LoginPage } from "login.slint";
 import { HomePage, DeviceItem } from "home.slint";
 import { SessionPage } from "session.slint";
-import { IncomingDialog, OutgoingDialog, Toast } from "dialogs.slint";
+import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
 
 export { DeviceItem }
@@ -27,6 +27,8 @@ export component AppWindow inherits Window {
     in-out property <string> login-password2;
     in-out property <string> login-device-name;
     in-out property <bool> login-create-mode;
+    in-out property <bool> login-recover-mode;
+    in-out property <string> login-recovery-key;
     in property <string> login-error;
     in property <bool> login-busy;
     callback login-submit();
@@ -83,6 +85,14 @@ export component AppWindow inherits Window {
     callback scroll(length, length);
     callback key(string, bool);
 
+    // Recovery key
+    in property <bool> recovery-key-visible;
+    in property <string> recovery-key;
+    in property <string> recovery-key-reason;
+    in property <bool> recovery-key-copied;
+    callback recovery-key-copy();
+    callback recovery-key-done();
+
     // Toast
     in property <string> toast-text;
     in property <bool> toast-error;
@@ -103,6 +113,8 @@ export component AppWindow inherits Window {
         password2 <=> root.login-password2;
         device-name <=> root.login-device-name;
         create-mode <=> root.login-create-mode;
+        recover-mode <=> root.login-recover-mode;
+        recovery-key <=> root.login-recovery-key;
         error: root.login-error;
         busy: root.login-busy;
         submit => { root.login-submit(); }
@@ -158,6 +170,14 @@ export component AppWindow inherits Window {
         fingerprint: root.incoming-fingerprint;
         same-account: root.incoming-same-account;
         answer(ok) => { root.incoming-answer(ok); }
+    }
+
+    if root.recovery-key-visible: RecoveryKeyDialog {
+        key: root.recovery-key;
+        reason: root.recovery-key-reason;
+        copied: root.recovery-key-copied;
+        copy => { root.recovery-key-copy(); }
+        done => { root.recovery-key-done(); }
     }
 
     if root.toast-text != "": Toast {

@@ -1,5 +1,5 @@
 import { Theme, Icons } from "theme.slint";
-import { Icon, PrimaryButton, GhostButton, Card, Avatar, Spinner } from "widgets.slint";
+import { Icon, PrimaryButton, GhostButton, Card, Avatar, Spinner, Checkbox } from "widgets.slint";
 
 component Backdrop inherits Rectangle {
     background: #05060acc;
@@ -136,5 +136,89 @@ export component Toast inherits Rectangle {
             background: root.error ? Theme.danger : Theme.success;
         }
         Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+    }
+}
+
+/// Shown once whenever a new recovery key is created. The user must confirm they stored it.
+export component RecoveryKeyDialog inherits Backdrop {
+    /// The key, as three lines of `XXXX-XXXX-XXXX`.
+    in property <string> key;
+    /// Why this key is being shown (new account, replaced after a reset, ...).
+    in property <string> reason;
+    in property <bool> copied;
+    callback copy();
+    callback done();
+    property <bool> saved;
+    Card {
+        width: 480px;
+        height: body.preferred-height;
+        body := VerticalLayout {
+            padding: 28px;
+            spacing: 16px;
+            HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 14px;
+                    background: Theme.warning-soft;
+                    Icon { d: Icons.key; size: 24px; color: Theme.warning; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text { text: "Save your recovery key"; color: Theme.text; font-size: 18px; font-weight: 700; }
+                    Text { text: root.reason; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                }
+            }
+            Text {
+                text: "If you forget your password, this key is the only way back into your account. Nobody else can reset it for you — not even the server's administrator.";
+                color: Theme.text;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                border-radius: 12px;
+                background: Theme.input-bg;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                VerticalLayout {
+                    padding: 18px;
+                    spacing: 12px;
+                    Text {
+                        text: root.key;
+                        color: #e3defe;
+                        font-size: 20px;
+                        font-family: Theme.mono;
+                        letter-spacing: 1px;
+                        horizontal-alignment: center;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        GhostButton {
+                            text: root.copied ? "Copied" : "Copy to clipboard";
+                            icon: Icons.copy;
+                            button-height: 34px;
+                            clicked => { root.copy(); }
+                        }
+                    }
+                }
+            }
+            Text {
+                text: "Store it in a password manager or print it out, and keep it away from this computer.";
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            Checkbox { text: "I have stored my recovery key somewhere safe"; checked <=> root.saved; }
+            HorizontalLayout {
+                alignment: end;
+                PrimaryButton {
+                    text: "Continue";
+                    enabled: root.saved;
+                    clicked => { if (root.saved) { root.done(); } }
+                }
+            }
+        }
     }
 }

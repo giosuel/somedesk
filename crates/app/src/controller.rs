@@ -14,6 +14,7 @@ use somedesk_client::session;
 use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
 use somedesk_codec::RgbFrame;
 use somedesk_crypto::keys::fingerprint;
+use somedesk_crypto::recovery::RecoveryKey;
 use somedesk_proto::control::{DeviceCert, DeviceInfo, ErrorCode, Event, SessionId};
 use somedesk_proto::session::{SessionMsg, POINTER_MAX};
 use somedesk_proto::{format_device_id, parse_device_id};
@@ -62,6 +63,8 @@ struct State {
     host_stop: Option<watch::Sender<bool>>,
     incoming_answer: Option<oneshot::Sender<bool>>,
     toast_generation: u64,
+    /// Keeps copied text available on X11, where the copying app must serve the clipboard.
+    copy_clipboard: Option<Box<dyn somedesk_platform::Clipboard>>,
 }
 
 struct Inner {
@@ -229,6 +232,15 @@ impl Controller {
             c.save_settings();
         });
         let c = self.clone();
+        ui.on_recovery_key_copy(move || c.copy_recovery_key());
+        let c = self.clone();
+        ui.on_recovery_key_done(move || {
+            c.ui(|ui| {
+                ui.set_recovery_key_visible(false);
+                ui.set_recovery_key("".into());
+            });
+        });
+        let c = self.clone();
         ui.on_incoming_answer(move |ok| {
             if let Some(tx) = c.0.state.lock().unwrap().incoming_answer.take() {
                 let _ = tx.send(ok);
@@ -286,16 +298,28 @@ impl Controller {
         let password = ui.get_login_password().to_string();
         let password2 = ui.get_login_password2().to_string();
         let device = ui.get_login_device_name().trim().to_string();
-        let create = ui.get_login_create_mode();
+        let recover = ui.get_login_recover_mode();
+        let create = ui.get_login_create_mode() && !recover;
+        let recovery_key = if recover { Some(RecoveryKey::parse(&ui.get_login_recovery_key())) } else { None };
 
         let problem = if server.is_empty() {
-            Some("Enter the address of your SomeDesk server.")
+            Some("Enter the address of your SomeDesk server.".to_string())
+        } else if let Some(Err(e)) = &recovery_key {
+            Some(if ui.get_login_recovery_key().trim().is_empty() {
+                "Enter your recovery key.".to_string()
+            } else {
+                let e = e.to_string();
+                format!("{}{}.", e[..1].to_uppercase(), &e[1..])
+            })
         } else if username.is_empty() || password.is_empty() {
-            Some("Enter your username and password.")
-        } else if create && password != password2 {
-            Some("The passwords do not match.")
+            Some(
+                if recover { "Enter your username and a new password." } else { "Enter your username and password." }
+                    .into(),
+            )
+        } else if (create || recover) && password != password2 {
+            Some("The passwords do not match.".into())
         } else if device.is_empty() {
-            Some("Give this computer a name.")
+            Some("Give this computer a name.".into())
         } else {
             None
         };
@@ -303,6 +327,7 @@ impl Controller {
             ui.set_login_error(p.into());
             return;
         }
+        let recovery_key = recovery_key.map(|r| r.expect("checked above"));
         ui.set_login_error("".into());
         ui.set_login_busy(true);
 
@@ -310,17 +335,33 @@ impl Controller {
         self.0.rt.spawn(async move {
             let result = async {
                 let (conn, _events) = ServerConn::connect(&server, None).await?;
-                if create {
-                    conn.register(&username, &password).await?;
-                }
-                let login = conn.login(&username, &password).await?;
+                // A recovery key to show the user once signed in, and why.
+                let mut new_key = None;
+                let login = if let Some(rk) = recovery_key {
+                    let recovered = conn.recover(&username, &rk, &password).await?;
+                    new_key = Some((
+                        recovered.new_recovery_key,
+                        "Your password was reset. The key you used no longer works; this one replaces it.",
+                    ));
+                    recovered.login
+                } else {
+                    if create {
+                        new_key = Some((conn.register(&username, &password).await?, "Created with your new account."));
+                    }
+                    let login = conn.login(&username, &password).await?;
+                    if !login.has_recovery {
+                        let rk = conn.set_up_recovery(&login).await?;
+                        new_key = Some((rk, "Your account did not have one yet, so SomeDesk created it now."));
+                    }
+                    login
+                };
                 let creds = conn.enroll_device(&server, &login, &device).await?;
                 conn.close();
-                Ok::<_, somedesk_client::ClientError>(creds)
+                Ok::<_, somedesk_client::ClientError>((creds, new_key))
             }
             .await;
             match result {
-                Ok(creds) => {
+                Ok((creds, new_key)) => {
                     if let Err(e) = creds.save(&this.creds_path()) {
                         tracing::error!("cannot store credentials: {e:#}");
                     }
@@ -330,8 +371,13 @@ impl Controller {
                         ui.set_login_busy(false);
                         ui.set_login_password("".into());
                         ui.set_login_password2("".into());
+                        ui.set_login_recovery_key("".into());
+                        ui.set_login_recover_mode(false);
                     });
                     this.go_online(creds);
+                    if let Some((rk, reason)) = new_key {
+                        this.show_recovery_key(&rk, reason);
+                    }
                 }
                 Err(e) => {
                     let msg = e.to_string();
@@ -342,6 +388,37 @@ impl Controller {
                 }
             }
         });
+    }
+
+    fn show_recovery_key(&self, rk: &RecoveryKey, reason: &'static str) {
+        // Three lines of three groups, easy to copy down by hand.
+        let display = rk.display();
+        let groups: Vec<&str> = display.split('-').collect();
+        let text = groups.chunks(3).map(|c| c.join("-")).collect::<Vec<_>>().join("\n");
+        self.ui(move |ui| {
+            ui.set_recovery_key(text.into());
+            ui.set_recovery_key_reason(reason.into());
+            ui.set_recovery_key_copied(false);
+            ui.set_recovery_key_visible(true);
+        });
+    }
+
+    fn copy_recovery_key(&self) {
+        let Some(ui) = self.0.ui.upgrade() else {
+            return;
+        };
+        let key = ui.get_recovery_key().replace('\n', "-");
+        let result = somedesk_platform::default_clipboard().and_then(|mut c| {
+            c.set_text(&key)?;
+            Ok(c)
+        });
+        match result {
+            Ok(c) => {
+                self.0.state.lock().unwrap().copy_clipboard = Some(c);
+                ui.set_recovery_key_copied(true);
+            }
+            Err(e) => self.toast(format!("Could not copy: {e}"), true),
+        }
     }
 
     fn sign_out(&self) {

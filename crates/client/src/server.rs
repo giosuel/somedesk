@@ -5,6 +5,7 @@ use crate::tls::PinningVerifier;
 use crate::{ClientError, Result};
 use somedesk_crypto::keys::{DeviceKey, IdentityKey};
 use somedesk_crypto::opaque;
+use somedesk_crypto::recovery::RecoveryKey;
 use somedesk_proto::control::*;
 use somedesk_proto::frame::{read_msg, write_msg};
 use std::collections::HashMap;
@@ -29,6 +30,16 @@ pub struct ServerConn {
 pub struct LoggedIn {
     pub username: String,
     pub identity: IdentityKey,
+    /// Whether the account has a recovery key. If not, offer to create one with
+    /// [`ServerConn::set_up_recovery`].
+    pub has_recovery: bool,
+}
+
+/// The result of a password reset with the recovery key.
+pub struct Recovered {
+    pub login: LoggedIn,
+    /// The replacement recovery key. The one used for the reset no longer works.
+    pub new_recovery_key: RecoveryKey,
 }
 
 async fn resolve(server: &str) -> Result<SocketAddr> {
@@ -165,16 +176,22 @@ impl ServerConn {
         })
     }
 
-    /// Creates an account. Generates the user's identity key and stores it on the server
-    /// encrypted under the password-derived key.
-    pub async fn register(&self, username: &str, password: &str) -> Result<()> {
-        let username = Self::normalize(username)?;
+    fn check_password(password: &str) -> Result<()> {
         if password.chars().count() < 8 {
             return Err(ClientError::Server(ErrorInfo::new(
                 ErrorCode::BadRequest,
                 "password must have at least 8 characters",
             )));
         }
+        Ok(())
+    }
+
+    /// Creates an account. Generates the user's identity key and stores it on the server twice:
+    /// encrypted under the password-derived key, and under the returned recovery key, which the
+    /// user must keep safe.
+    pub async fn register(&self, username: &str, password: &str) -> Result<RecoveryKey> {
+        let username = Self::normalize(username)?;
+        Self::check_password(password)?;
         let (m1, st) = opaque::client_register_start(&username, password)?;
         let Response::RegisterStart { message } =
             self.request(Request::RegisterStart { username: username.clone(), message: m1 }).await?
@@ -184,11 +201,55 @@ impl ServerConn {
         let (upload, export_key) = opaque::client_register_finish(st, password, &message)?;
         let identity = IdentityKey::generate();
         let key_bundle = identity.seal(&export_key, &username);
+        let recovery_key = RecoveryKey::generate();
+        let recovery = recovery_setup(&recovery_key, &identity, &username);
         match self
-            .request(Request::RegisterFinish { message: upload, identity_pk: identity.public(), key_bundle })
+            .request(Request::RegisterFinish { message: upload, identity_pk: identity.public(), key_bundle, recovery })
             .await?
         {
-            Response::Ok => Ok(()),
+            Response::Ok => Ok(recovery_key),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Creates a new recovery key for the logged-in account, replacing any previous one.
+    pub async fn set_up_recovery(&self, login: &LoggedIn) -> Result<RecoveryKey> {
+        let recovery_key = RecoveryKey::generate();
+        let recovery = recovery_setup(&recovery_key, &login.identity, &login.username);
+        match self.request(Request::SetRecovery { recovery }).await? {
+            Response::Ok => Ok(recovery_key),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Sets a new password using the recovery key. On success this connection is logged in, as
+    /// after [`ServerConn::login`], and the recovery key is replaced by a new one.
+    pub async fn recover(&self, username: &str, recovery_key: &RecoveryKey, new_password: &str) -> Result<Recovered> {
+        let username = Self::normalize(username)?;
+        Self::check_password(new_password)?;
+        let Response::RecoveryChallenge { challenge } =
+            self.request(Request::RecoveryStart { username: username.clone() }).await?
+        else {
+            return Err(unexpected());
+        };
+        let proof = recovery_key.prove(&username, &challenge).to_vec();
+        let (m1, st) = opaque::client_register_start(&username, new_password)?;
+        let Response::RecoveryProve { identity_pk, recovery_bundle, message } =
+            self.request(Request::RecoveryProve { proof, message: m1 }).await?
+        else {
+            return Err(unexpected());
+        };
+        // Only proceed if the recovery copy really opens to the account's identity key; otherwise
+        // the server would end up with a password bundle we cannot vouch for.
+        let identity = recovery_key.open(&recovery_bundle, &username, &identity_pk)?;
+        let (upload, export_key) = opaque::client_register_finish(st, new_password, &message)?;
+        let key_bundle = identity.seal(&export_key, &username);
+        let new_recovery_key = RecoveryKey::generate();
+        let recovery = recovery_setup(&new_recovery_key, &identity, &username);
+        match self.request(Request::RecoveryFinish { message: upload, key_bundle, recovery }).await? {
+            Response::Ok => {
+                Ok(Recovered { login: LoggedIn { username, identity, has_recovery: true }, new_recovery_key })
+            }
             _ => Err(unexpected()),
         }
     }
@@ -209,13 +270,13 @@ impl ServerConn {
             }
             Err(e) => return Err(e.into()),
         };
-        let Response::LoginFinish { identity_pk, key_bundle } =
+        let Response::LoginFinish { identity_pk, key_bundle, has_recovery } =
             self.request(Request::LoginFinish { message: fin }).await?
         else {
             return Err(unexpected());
         };
         let identity = IdentityKey::open(&key_bundle, &export_key, &username, &identity_pk)?;
-        Ok(LoggedIn { username, identity })
+        Ok(LoggedIn { username, identity, has_recovery })
     }
 
     /// Enrolls this machine under the logged-in account.
@@ -284,6 +345,10 @@ impl ServerConn {
         write_msg(&mut send, &RelayJoin { session_id }).await?;
         Ok((send, recv))
     }
+}
+
+fn recovery_setup(recovery_key: &RecoveryKey, identity: &IdentityKey, username: &str) -> RecoverySetup {
+    RecoverySetup { recovery_pk: recovery_key.public(), key_bundle: recovery_key.seal(identity, username) }
 }
 
 impl Drop for ServerConn {

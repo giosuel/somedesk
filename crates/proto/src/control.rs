@@ -36,6 +36,7 @@ pub enum Request {
         message: Vec<u8>,
         identity_pk: [u8; 32],
         key_bundle: EncryptedKeyBundle,
+        recovery: RecoverySetup,
     },
     /// OPAQUE login, step 1 (`CredentialRequest`).
     LoginStart {
@@ -45,6 +46,28 @@ pub enum Request {
     /// OPAQUE login, step 2 (`CredentialFinalization`).
     LoginFinish {
         message: Vec<u8>,
+    },
+    /// Replaces the account's recovery key. Requires a password login (or a completed recovery)
+    /// on this connection.
+    SetRecovery {
+        recovery: RecoverySetup,
+    },
+    /// Password reset with the recovery key, step 1: asks for a challenge to sign.
+    RecoveryStart {
+        username: String,
+    },
+    /// Step 2: proves possession of the recovery key and starts a new OPAQUE registration
+    /// (`RegistrationRequest`).
+    RecoveryProve {
+        proof: Vec<u8>,
+        message: Vec<u8>,
+    },
+    /// Step 3: the new OPAQUE record, the identity key sealed under the new password, and a new
+    /// recovery key (recovery keys are single-use). Afterwards the connection is logged in.
+    RecoveryFinish {
+        message: Vec<u8>,
+        key_bundle: EncryptedKeyBundle,
+        recovery: RecoverySetup,
     },
     /// Enrolls this machine. Requires a password login on this connection.
     RegisterDevice {
@@ -79,15 +102,43 @@ pub enum ServerFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Response {
     Ok,
-    Hello { version: u32 },
-    RegisterStart { message: Vec<u8> },
-    LoginStart { message: Vec<u8> },
-    LoginFinish { identity_pk: [u8; 32], key_bundle: EncryptedKeyBundle },
-    DeviceRegistered { device_id: u64, token: [u8; 32] },
-    Authenticated { username: String, device: DeviceInfo },
+    Hello {
+        version: u32,
+    },
+    RegisterStart {
+        message: Vec<u8>,
+    },
+    LoginStart {
+        message: Vec<u8>,
+    },
+    LoginFinish {
+        identity_pk: [u8; 32],
+        key_bundle: EncryptedKeyBundle,
+        has_recovery: bool,
+    },
+    RecoveryChallenge {
+        challenge: [u8; 32],
+    },
+    /// The recovery-key copy of the identity key, plus the OPAQUE `RegistrationResponse`.
+    RecoveryProve {
+        identity_pk: [u8; 32],
+        recovery_bundle: EncryptedKeyBundle,
+        message: Vec<u8>,
+    },
+    DeviceRegistered {
+        device_id: u64,
+        token: [u8; 32],
+    },
+    Authenticated {
+        username: String,
+        device: DeviceInfo,
+    },
     Devices(Vec<DeviceInfo>),
     Device(DeviceInfo),
-    Connect { session_id: SessionId, host: DeviceInfo },
+    Connect {
+        session_id: SessionId,
+        host: DeviceInfo,
+    },
     Pong,
 }
 
@@ -140,6 +191,14 @@ pub struct EncryptedKeyBundle {
     pub version: u8,
     pub nonce: [u8; 24],
     pub ciphertext: Vec<u8>,
+}
+
+/// What the server stores for a recovery key: the public key that checks recovery proofs, and
+/// the identity private key sealed under a key derived from the recovery key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoverySetup {
+    pub recovery_pk: [u8; 32],
+    pub key_bundle: EncryptedKeyBundle,
 }
 
 /// Binds a device's Noise static key to a user identity. Signed by the user's identity key,
