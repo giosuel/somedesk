@@ -18,6 +18,8 @@ pub enum ViewerEvent {
         height: u32,
     },
     Frame(RgbFrame),
+    /// The host only allows viewing; input is ignored.
+    ViewOnly,
     /// Round-trip time measured with pings.
     Latency(Duration),
 }
@@ -90,6 +92,7 @@ pub async fn run(
                     }
                 }
                 Some(SessionMsg::ScreenInfo { width, height }) => events(ViewerEvent::ScreenInfo { width, height }),
+                Some(SessionMsg::ViewOnly) => events(ViewerEvent::ViewOnly),
                 Some(SessionMsg::Pong { t }) => {
                     let rtt = start.elapsed().saturating_sub(Duration::from_micros(t));
                     events(ViewerEvent::Latency(rtt));

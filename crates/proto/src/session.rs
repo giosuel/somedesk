@@ -16,6 +16,8 @@ pub enum SessionMsg {
     Reject {
         reason: String,
     },
+    /// Host → viewer: the screen is shared, but remote input is not allowed on the host.
+    ViewOnly,
     /// Host → viewer: current screen geometry.
     ScreenInfo {
         width: u32,

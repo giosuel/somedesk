@@ -12,6 +12,8 @@ export component IncomingDialog inherits Backdrop {
     in property <string> device;
     in property <string> fingerprint;
     in property <bool> same-account;
+    /// Extra guidance, e.g. about the desktop's own permission dialog on Wayland.
+    in property <string> note;
     callback answer(bool);
     Card {
         width: 440px;
@@ -60,6 +62,16 @@ export component IncomingDialog inherits Backdrop {
                 text: "Only accept if you are expecting this connection.";
                 color: Theme.warning;
                 font-size: 12px;
+            }
+            if root.note != "": Rectangle {
+                border-radius: 10px;
+                background: Theme.accent-soft;
+                HorizontalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    Icon { d: Icons.monitor; size: 16px; color: #b9b1ff; stroke: 1.8px; }
+                    Text { text: root.note; color: Theme.text; font-size: 12px; wrap: word-wrap; }
+                }
             }
             HorizontalLayout {
                 spacing: 12px;

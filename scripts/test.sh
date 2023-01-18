@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs the full test suite: unit tests, X11 backend tests on a private Xvfb, and the
-# server/end-to-end integration tests against PostgreSQL.
+# Runs the full test suite: unit tests, X11 backend tests on a private Xvfb, the
+# server/end-to-end integration tests against PostgreSQL, and (if GNOME is installed) a
+# Wayland end-to-end test in a headless GNOME session.
 #
 #   SOMEDESK_TEST_DATABASE_URL  admin connection used to create throwaway databases
 #                               (default: postgres://sysadmin:devpass@localhost/postgres)
@@ -18,3 +19,18 @@ export SOMEDESK_TEST_DISPLAY="$DISPLAY_NUM"
 
 # X11 tests share one display, so run test binaries single-threaded where they touch it.
 cargo test --workspace "$@" -- --test-threads=1
+
+# Wayland: a headless GNOME session with the desktop portal, if GNOME is installed.
+if command -v gnome-shell >/dev/null && [ -x /usr/libexec/xdg-desktop-portal-gnome ]; then
+    export WL_DIR="/tmp/somedesk-wayland-test-$$"
+    trap 'kill $XVFB_PID 2>/dev/null || true; scripts/wayland-env.sh stop >/dev/null 2>&1 || true; rm -rf "$WL_DIR"' EXIT
+    scripts/wayland-env.sh start >/dev/null
+    state=$(scripts/wayland-grant.sh)
+    (
+        . "$WL_DIR/env"
+        unset SOMEDESK_TEST_DISPLAY
+        SOMEDESK_TEST_WAYLAND_STATE="$state" cargo test -p somedesk-e2e-tests --test session wayland "$@"
+    )
+else
+    echo "gnome-shell / xdg-desktop-portal-gnome not installed: skipping the Wayland test"
+fi

@@ -3,15 +3,16 @@
 Self-hosted remote desktop (in the spirit of AnyDesk/TeamViewer) written in Rust, with
 end-to-end encrypted sessions and zero-knowledge password login.
 
-**Status:** Linux (X11) ↔ Linux remote control with clipboard sharing and password recovery works
-end to end through the relay. Wayland, Windows and macOS backends, file transfer and P2P are next.
+**Status:** Linux ↔ Linux remote control works end to end through the relay, on X11 and on
+Wayland (GNOME/KDE via the desktop portal), with clipboard sharing and password recovery.
+Windows and macOS backends, file transfer and P2P are next.
 
 ## Architecture
 
 ```
  viewer (Slint UI)                                     host (Slint UI)
  decode ← Noise ←─┐                               ┌─→ Noise → capture/encode
- input  → Noise →─┤  QUIC        server    QUIC   ├─← Noise ← inject (XTest)
+ input  → Noise →─┤  QUIC        server    QUIC   ├─← Noise ← inject (XTest / portal)
                   └──────→ blind relay ←──────────┘
                            accounts · devices · presence (PostgreSQL)
 ```
@@ -23,7 +24,7 @@ end to end through the relay. Wayland, Windows and macOS backends, file transfer
 | `server` | QUIC control protocol, device registry, presence, blind relay (PostgreSQL via sqlx) |
 | `client` | Server connection, account flows, host and viewer session pipelines |
 | `codec` | H.264 encode/decode (OpenH264) |
-| `platform` | Screen capture and input injection (Linux/X11 today) |
+| `platform` | Screen capture, input injection and clipboard (Linux: X11, and Wayland via the desktop portal + PipeWire) |
 | `app` | Desktop client (Slint) |
 | `e2e-tests` | Integration tests: real server + PostgreSQL + relay + clients |
 
@@ -57,8 +58,10 @@ end to end through the relay. Wayland, Windows and macOS backends, file transfer
 
 ## Building and running
 
-Requirements (Debian/Ubuntu): `build-essential pkg-config libfontconfig1-dev libxkbcommon-dev
-libxkbcommon-x11-dev libxcb1-dev libx11-dev postgresql` (tests: `xvfb xsel`).
+Requirements (Debian/Ubuntu): `build-essential pkg-config clang libfontconfig1-dev libxkbcommon-dev
+libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev postgresql`
+(tests: `xvfb xsel`, and for the Wayland test `gnome-shell xdg-desktop-portal-gnome pipewire
+wireplumber`).
 
 ```sh
 cargo build --release
@@ -73,6 +76,23 @@ target/release/somedesk --server your.server.example
 
 `--profile NAME` runs independent client instances side by side (separate credentials).
 
+## Linux desktops
+
+The host picks its backend from the session: **X11** (XGetImage + XTest), or on **Wayland** the
+**xdg-desktop-portal** (`RemoteDesktop` + `ScreenCast`, frames over PipeWire).
+`SOMEDESK_BACKEND=x11|portal` overrides the choice.
+
+On Wayland the desktop itself asks the person at the host for permission the first time someone
+connects (after they accepted in SomeDesk). They choose *Share* and switch on *Allow Remote
+Interaction*; SomeDesk tells them so. The portal's restore token is stored next to the device
+credentials, so later sessions start without asking again. If remote interaction is not allowed,
+or the desktop has no remote-input portal (wlroots compositors such as sway), the screen is shared
+view-only and the viewer is told.
+
+Known gaps: the view-only path on wlroots is untested (xdg-desktop-portal-wlr cannot capture a
+GPU-less headless sway); clipboard sharing on GNOME Wayland goes through XWayland, since GNOME
+does not offer the Wayland data-control protocol.
+
 ## Tests
 
 ```sh
@@ -83,3 +103,6 @@ The clipboard test also needs `xsel`. Database tests need `SOMEDESK_TEST_DATABAS
 databases; `scripts/test.sh` defaults to the local dev role). X11 tests need `Xvfb`.
 
 `scripts/demo-env.sh` starts a server and two virtual displays for manual testing.
+`scripts/wayland-env.sh` starts a headless GNOME Wayland session (with PipeWire and the portal);
+`scripts/gnome-input.sh` drives it like `xdotool`, and `scripts/wayland-grant.sh` answers the
+portal's permission dialog once. `scripts/test.sh` uses them for the Wayland end-to-end test.
