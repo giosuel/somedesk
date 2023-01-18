@@ -578,10 +578,16 @@ impl Controller {
             self.0.busy.store(false, Ordering::SeqCst);
             return;
         }
-        let backends =
-            somedesk_platform::default_capturer().and_then(|c| Ok((c, somedesk_platform::default_injector()?)));
-        let (capturer, injector) = match backends {
-            Ok(b) => b,
+        // On Wayland this shows the desktop's own permission dialog (once), so it may block.
+        let dir = self.0.dir.clone();
+        let screen = tokio::task::spawn_blocking(move || somedesk_platform::open_screen(Some(&dir)))
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")));
+        let (capturer, injector, can_control) = match screen {
+            Ok(s) => {
+                tracing::info!(backend = s.backend, can_control = s.can_control, "sharing the screen");
+                (s.capturer, s.injector, s.can_control)
+            }
             Err(e) => {
                 host::reject(ch, &format!("Screen sharing is not available on this computer: {e}")).await;
                 self.toast(format!("Could not share the screen: {e}"), true);
@@ -597,8 +603,12 @@ impl Controller {
             ui.set_hosting_peer(shown.into());
             ui.set_hosting_active(true);
         });
+        if !can_control {
+            self.toast("Remote control was not allowed, so the screen is shared view-only", true);
+        }
         let clipboard = self.clipboard();
-        let result = host::serve(ch, capturer, injector, clipboard, HostSettings::default(), stop_rx).await;
+        let settings = HostSettings { view_only: !can_control, ..Default::default() };
+        let result = host::serve(ch, capturer, injector, clipboard, settings, stop_rx).await;
         self.0.state.lock().unwrap().host_stop = None;
         self.0.busy.store(false, Ordering::SeqCst);
         self.ui(|ui| ui.set_hosting_active(false));
@@ -613,7 +623,14 @@ impl Controller {
         let (tx, rx) = oneshot::channel();
         self.0.state.lock().unwrap().incoming_answer = Some(tx);
         let (user, device, fp) = (peer.username.clone(), peer.device_name.clone(), fingerprint(&peer.identity_pk));
+        let note = if somedesk_platform::will_ask_permission(Some(&self.0.dir)) {
+            "Your desktop will then ask what to share. Choose Share, and turn on \"Allow Remote Interaction\" so \
+             they can use the mouse and keyboard. You will only be asked once."
+        } else {
+            ""
+        };
         self.ui(move |ui| {
+            ui.set_incoming_note(note.into());
             ui.set_incoming_user_letter(letter(&user).into());
             ui.set_incoming_user(user.into());
             ui.set_incoming_device(device.into());
@@ -703,11 +720,16 @@ impl Controller {
                     ui.set_session_peer(label.into());
                     ui.set_session_peer_id(id.into());
                     ui.set_has_frame(false);
+                    ui.set_session_view_only(false);
                     ui.set_latency("–".into());
                     ui.set_fps("–".into());
                     ui.set_outgoing_visible(false);
                     ui.set_page(Page::Session);
                 });
+            }
+            ViewerEvent::ViewOnly => {
+                this.ui(|ui| ui.set_session_view_only(true));
+                this.toast("The other computer only allows viewing, not control", false);
             }
             ViewerEvent::ScreenInfo { width, height } => {
                 this.ui(move |ui| ui.set_resolution(format!("{width}×{height}").into()));

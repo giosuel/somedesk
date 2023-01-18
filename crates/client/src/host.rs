@@ -19,11 +19,13 @@ pub struct HostSettings {
     /// After the screen stops changing, keep encoding this many frames so the encoder can refine
     /// quality, then go idle.
     pub refine_frames: u32,
+    /// Share the screen only; input from the viewer is ignored.
+    pub view_only: bool,
 }
 
 impl Default for HostSettings {
     fn default() -> Self {
-        Self { max_fps: 30, bitrate_bps: 6_000_000, refine_frames: 15 }
+        Self { max_fps: 30, bitrate_bps: 6_000_000, refine_frames: 15, view_only: false }
     }
 }
 
@@ -56,6 +58,10 @@ pub async fn serve(
     let Channel { mut sender, mut receiver, peer } = ch;
     tracing::info!(peer = %peer.username, device = %peer.device_name, "session accepted");
     sender.send(&SessionMsg::Accept).await?;
+    if settings.view_only {
+        sender.send(&SessionMsg::ViewOnly).await?;
+    }
+    let view_only = settings.view_only;
 
     let running = Arc::new(AtomicBool::new(true));
     let keyframe = Arc::new(AtomicBool::new(true));
@@ -109,8 +115,10 @@ pub async fn serve(
                     | SessionMsg::Scroll { .. }
                     | SessionMsg::Key { .. }),
                 ) => {
-                    input_events += 1;
-                    let _ = input_tx.send(m);
+                    if !view_only {
+                        input_events += 1;
+                        let _ = input_tx.send(m);
+                    }
                 }
                 Some(SessionMsg::Clipboard { text }) => {
                     if let Some(c) = &clipboard {

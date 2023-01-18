@@ -347,3 +347,78 @@ async fn x11_host_end_to_end() {
     assert!(pos.0.abs_diff(want.0) <= 1 && pos.1.abs_diff(want.1) <= 1, "pointer at {pos:?}, wanted {want:?}");
     ts.stop().await;
 }
+
+/// Asks the headless GNOME session (scripts/wayland-env.sh) where its pointer is.
+fn gnome_pointer() -> (u32, u32) {
+    let out = std::process::Command::new("gdbus")
+        .args(["call", "--session", "--dest", "org.gnome.Shell", "--object-path", "/org/gnome/Shell"])
+        .args(["--method", "org.gnome.Shell.Eval", "global.get_pointer().slice(0, 2).join(\",\")"])
+        .output()
+        .expect("run gdbus");
+    let text = String::from_utf8_lossy(&out.stdout);
+    // (true, '"123,456"')
+    let inner = text.split('"').nth(1).unwrap_or_else(|| panic!("unexpected Shell.Eval output {text:?}"));
+    let (x, y) = inner.split_once(',').expect("x,y");
+    (x.parse().unwrap(), y.parse().unwrap())
+}
+
+/// The real thing on Wayland: share a GNOME session through the desktop portal. Needs the
+/// environment from scripts/wayland-env.sh and a granted permission (scripts/wayland-grant.sh),
+/// passed as SOMEDESK_TEST_WAYLAND_STATE.
+#[tokio::test]
+async fn wayland_portal_host_end_to_end() {
+    let Ok(state) = std::env::var("SOMEDESK_TEST_WAYLAND_STATE") else {
+        eprintln!("SOMEDESK_TEST_WAYLAND_STATE not set, skipping");
+        return;
+    };
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "gnome-desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
+
+    let mut screen = tokio::task::spawn_blocking(move || {
+        somedesk_platform::open_screen(Some(std::path::Path::new(&state)))
+            .expect("portal session (permission granted?)")
+    })
+    .await
+    .unwrap();
+    assert_eq!(screen.backend, "portal");
+    assert!(screen.can_control, "remote interaction was granted");
+    let (sw, sh) = screen.injector.screen_size().unwrap();
+    let (_stop_tx, stop_rx) = watch::channel(false);
+    let host_task =
+        tokio::spawn(host::serve(ch, screen.capturer, screen.injector, None, HostSettings::default(), stop_rx));
+
+    tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
+    let f = tokio::time::timeout(T, v.frames.recv()).await.expect("a frame from PipeWire").unwrap();
+    assert_eq!((f.width, f.height), (sw & !1, sh & !1));
+
+    // Remote pointer moves land where they should on the GNOME screen.
+    for (fx, fy) in [(1, 4), (3, 4), (2, 3)] {
+        let (nx, ny) = ((POINTER_MAX as u32 * fx / 4) as u16, (POINTER_MAX as u32 * fy / 4) as u16);
+        v.input.send(SessionMsg::PointerMove { x: nx, y: ny }).unwrap();
+        let want = ((sw - 1) * fx / 4, (sh - 1) * fy / 4);
+        let mut pos = (0, 0);
+        for _ in 0..50 {
+            pos = gnome_pointer();
+            if pos.0.abs_diff(want.0) <= 1 && pos.1.abs_diff(want.1) <= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(pos.0.abs_diff(want.0) <= 1 && pos.1.abs_diff(want.1) <= 1, "pointer at {pos:?}, wanted {want:?}");
+    }
+
+    drop(v.input);
+    tokio::time::timeout(T, v.task).await.unwrap().unwrap().unwrap();
+    let stats = tokio::time::timeout(T, host_task).await.unwrap().unwrap().unwrap();
+    assert_eq!(stats.input_events, 3);
+    ts.stop().await;
+}

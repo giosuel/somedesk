@@ -9,6 +9,7 @@ export component SessionPage inherits Rectangle {
     in property <string> latency;
     in property <string> fps;
     in property <string> resolution;
+    in property <bool> view-only;
     callback disconnect();
     callback pointer-moved(length, length, length, length);
     callback pointer-button(int, bool);
@@ -52,6 +53,13 @@ export component SessionPage inherits Rectangle {
                         Icon { y: (parent.height - self.height) / 2; d: Icons.lock; size: 13px; color: Theme.success; stroke: 2.2px; }
                         Text { text: "End-to-end encrypted"; color: Theme.success; font-size: 12px; font-weight: 600; vertical-alignment: center; }
                     }
+                }
+                if root.view-only: Pill {
+                    y: (parent.height - self.height) / 2;
+                    height: 26px;
+                    text: "View only";
+                    fg: Theme.warning;
+                    bg: Theme.warning-soft;
                 }
                 Rectangle { horizontal-stretch: 1; }
                 for stat in [

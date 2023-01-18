@@ -29,7 +29,10 @@ fn data_dir(profile: &str) -> PathBuf {
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "info,zbus=warn,zbus::proxy=error".into()),
+        )
         .init();
     let args = Args::parse();
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;

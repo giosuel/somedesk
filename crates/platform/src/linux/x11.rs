@@ -15,7 +15,7 @@ use x11rb::wrapper::ConnectionExt as _;
 fn connect(display: Option<&str>) -> anyhow::Result<(RustConnection, Window)> {
     if display.is_none() && std::env::var_os("DISPLAY").is_none() {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            bail!("Wayland sessions are not supported yet; please log in with an X11 session");
+            bail!("this is a Wayland session without X11; use the portal backend (SOMEDESK_BACKEND=portal)");
         }
         bail!("no X11 display found (DISPLAY is not set)");
     }

@@ -64,6 +64,7 @@ export component AppWindow inherits Window {
     in property <string> incoming-device;
     in property <string> incoming-fingerprint;
     in property <bool> incoming-same-account;
+    in property <string> incoming-note;
     callback incoming-answer(bool);
 
     // Outgoing request
@@ -79,6 +80,7 @@ export component AppWindow inherits Window {
     in property <string> latency;
     in property <string> fps;
     in property <string> resolution;
+    in property <bool> session-view-only;
     callback disconnect();
     callback pointer-moved(length, length, length, length);
     callback pointer-button(int, bool);
@@ -151,6 +153,7 @@ export component AppWindow inherits Window {
         latency: root.latency;
         fps: root.fps;
         resolution: root.resolution;
+        view-only: root.session-view-only;
         disconnect => { root.disconnect(); }
         pointer-moved(x, y, w, h) => { root.pointer-moved(x, y, w, h); }
         pointer-button(b, d) => { root.pointer-button(b, d); }
@@ -169,6 +172,7 @@ export component AppWindow inherits Window {
         device: root.incoming-device;
         fingerprint: root.incoming-fingerprint;
         same-account: root.incoming-same-account;
+        note: root.incoming-note;
         answer(ok) => { root.incoming-answer(ok); }
     }
 
