@@ -28,9 +28,12 @@ case "$cmd" in
 move)
     eval_js "$PRELUDE ptr.notify_absolute_motion(now(), $1, $2); 'ok'" ;;
 click)
-    # Separate steps with short pauses: clients ignore a press that arrives with the motion.
+    # Hover first and pause between steps: clients ignore a press that arrives together with the
+    # pointer entering their window.
+    eval_js "$PRELUDE ptr.notify_absolute_motion(now(), $(($1 - 3)), $(($2 - 3))); 'ok'"
+    sleep 0.15
     eval_js "$PRELUDE ptr.notify_absolute_motion(now(), $1, $2); 'ok'"
-    sleep 0.1
+    sleep 0.15
     eval_js "$PRELUDE ptr.notify_button(now(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.PRESSED); 'ok'"
     sleep 0.05
     eval_js "$PRELUDE ptr.notify_button(now(), Clutter.BUTTON_PRIMARY, Clutter.ButtonState.RELEASED); 'ok'" ;;

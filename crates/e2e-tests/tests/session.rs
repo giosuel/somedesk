@@ -1,11 +1,12 @@
 //! Full remote-control sessions through the relay.
 
+use somedesk_client::files::{AcceptPolicy, Direction, FileTransfers, TransferEvent};
 use somedesk_client::host::{self, HostSettings};
 use somedesk_client::session;
 use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
+use somedesk_client::SessionExtras;
 use somedesk_codec::RgbFrame;
 use somedesk_e2e_tests::{Device, FakeCapturer, FakeClipboard, RecordingInjector, TestServer};
-use somedesk_platform::Clipboard;
 use somedesk_proto::control::Event;
 use somedesk_proto::session::{SessionMsg, POINTER_MAX};
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,10 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 const T: Duration = Duration::from_secs(10);
+
+fn clipboard_extras(clip: &FakeClipboard) -> SessionExtras {
+    SessionExtras { clipboard: Some(Box::new(clip.clone())), ..Default::default() }
+}
 
 struct ViewerSide {
     input: mpsc::UnboundedSender<SessionMsg>,
@@ -22,10 +27,10 @@ struct ViewerSide {
 }
 
 async fn start_viewer(viewer: &Device, host_id: u64) -> ViewerSide {
-    start_viewer_with(viewer, host_id, None).await
+    start_viewer_with(viewer, host_id, SessionExtras::default()).await
 }
 
-async fn start_viewer_with(viewer: &Device, host_id: u64, clipboard: Option<Box<dyn Clipboard>>) -> ViewerSide {
+async fn start_viewer_with(viewer: &Device, host_id: u64, extras: SessionExtras) -> ViewerSide {
     let (ch, host_info) = session::connect(&viewer.conn, &viewer.creds, host_id).await.expect("viewer handshake");
     assert_eq!(ch.peer.device_pk, host_info.cert.device_pk);
     let (input, input_rx) = mpsc::unbounded_channel();
@@ -40,7 +45,7 @@ async fn start_viewer_with(viewer: &Device, host_id: u64, clipboard: Option<Box<
         }
         _ => {}
     });
-    let task = tokio::spawn(viewer::run(ch, sink, input_rx, clipboard));
+    let task = tokio::spawn(viewer::run(ch, sink, input_rx, extras));
     ViewerSide { input, frames, accepted, task }
 }
 
@@ -97,8 +102,14 @@ async fn remote_control_session_end_to_end() {
     let log = injector.log.clone();
     let (stop_tx, stop_rx) = watch::channel(false);
     let cap = FakeCapturer { width: 320, height: 240, bgra: color.clone() };
-    let host_task =
-        tokio::spawn(host::serve(host_ch, Box::new(cap), Box::new(injector), None, HostSettings::default(), stop_rx));
+    let host_task = tokio::spawn(host::serve(
+        host_ch,
+        Box::new(cap),
+        Box::new(injector),
+        SessionExtras::default(),
+        HostSettings::default(),
+        stop_rx,
+    ));
 
     tokio::time::timeout(T, v.accepted.recv()).await.expect("accepted").unwrap();
     let f = frame_matching(&mut v.frames, [224, 64, 32]).await;
@@ -192,7 +203,7 @@ async fn host_stop_ends_viewer_session() {
         ch,
         Box::new(cap),
         Box::new(RecordingInjector::default()),
-        None,
+        SessionExtras::default(),
         HostSettings::default(),
         stop_rx,
     ));
@@ -232,7 +243,7 @@ async fn third_party_cannot_join_a_session() {
         ch,
         Box::new(cap),
         Box::new(RecordingInjector::default()),
-        None,
+        SessionExtras::default(),
         HostSettings::default(),
         stop_rx,
     ));
@@ -256,15 +267,14 @@ async fn clipboard_is_shared_both_ways() {
         let (sid, from) = next_incoming(&mut host_dev).await;
         session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
     };
-    let (mut v, ch) =
-        tokio::join!(start_viewer_with(&viewer_dev, host_id, Some(Box::new(viewer_clip.clone()))), host_side);
+    let (mut v, ch) = tokio::join!(start_viewer_with(&viewer_dev, host_id, clipboard_extras(&viewer_clip)), host_side);
     let (_stop_tx, stop_rx) = watch::channel(false);
     let cap = FakeCapturer { width: 64, height: 64, bgra: Arc::new(Mutex::new([0, 0, 0, 255])) };
     let host_task = tokio::spawn(host::serve(
         ch,
         Box::new(cap),
         Box::new(RecordingInjector::default()),
-        Some(Box::new(host_clip.clone())),
+        clipboard_extras(&host_clip),
         HostSettings::default(),
         stop_rx,
     ));
@@ -326,7 +336,14 @@ async fn x11_host_end_to_end() {
     let cap = somedesk_platform::linux::x11::X11Capturer::open(Some(&display)).unwrap();
     let inj = somedesk_platform::linux::x11::X11Injector::open(Some(&display)).unwrap();
     let (_stop_tx, stop_rx) = watch::channel(false);
-    tokio::spawn(host::serve(ch, Box::new(cap), Box::new(inj), None, HostSettings::default(), stop_rx));
+    tokio::spawn(host::serve(
+        ch,
+        Box::new(cap),
+        Box::new(inj),
+        SessionExtras::default(),
+        HostSettings::default(),
+        stop_rx,
+    ));
 
     tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
     let f = frame_matching(&mut v.frames, [0xC8, 0x32, 0x64]).await;
@@ -393,8 +410,14 @@ async fn wayland_portal_host_end_to_end() {
     assert!(screen.can_control, "remote interaction was granted");
     let (sw, sh) = screen.injector.screen_size().unwrap();
     let (_stop_tx, stop_rx) = watch::channel(false);
-    let host_task =
-        tokio::spawn(host::serve(ch, screen.capturer, screen.injector, None, HostSettings::default(), stop_rx));
+    let host_task = tokio::spawn(host::serve(
+        ch,
+        screen.capturer,
+        screen.injector,
+        SessionExtras::default(),
+        HostSettings::default(),
+        stop_rx,
+    ));
 
     tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
     let f = tokio::time::timeout(T, v.frames.recv()).await.expect("a frame from PipeWire").unwrap();
@@ -420,5 +443,191 @@ async fn wayland_portal_host_end_to_end() {
     tokio::time::timeout(T, v.task).await.unwrap().unwrap().unwrap();
     let stats = tokio::time::timeout(T, host_task).await.unwrap().unwrap().unwrap();
     assert_eq!(stats.input_events, 3);
+    ts.stop().await;
+}
+
+fn transfer_events() -> (somedesk_client::files::TransferSink, mpsc::UnboundedReceiver<TransferEvent>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (Arc::new(move |ev| drop(tx.send(ev))), rx)
+}
+
+/// Waits for a completed or failed event, skipping progress.
+async fn transfer_outcome(rx: &mut mpsc::UnboundedReceiver<TransferEvent>) -> TransferEvent {
+    loop {
+        let ev = tokio::time::timeout(T, rx.recv()).await.expect("transfer outcome").unwrap();
+        if matches!(ev, TransferEvent::Completed { .. } | TransferEvent::Failed { .. } | TransferEvent::Offered { .. })
+        {
+            return ev;
+        }
+    }
+}
+
+/// Retries until the session has attached the transfers.
+async fn send_when_ready(files: &FileTransfers, path: &std::path::Path) -> u32 {
+    for _ in 0..100 {
+        if let Ok(id) = files.send_file(path) {
+            return id;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("session never became ready for file transfer");
+}
+
+#[tokio::test]
+async fn files_are_transferred_both_ways() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let tmp = std::env::temp_dir().join(format!("somedesk-files-{}-{}", std::process::id(), rand::random::<u32>()));
+    let (host_dl, viewer_dl, src) = (tmp.join("host-dl"), tmp.join("viewer-dl"), tmp.join("src"));
+    std::fs::create_dir_all(&src).unwrap();
+
+    // The host saves files from the viewer straight away; the viewer asks first.
+    let (host_sink, mut host_ev) = transfer_events();
+    let host_files = FileTransfers::new(host_dl.clone(), AcceptPolicy::Always, host_sink);
+    let (viewer_sink, mut viewer_ev) = transfer_events();
+    let viewer_files = FileTransfers::new(viewer_dl.clone(), AcceptPolicy::Ask, viewer_sink);
+
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let viewer_extras = SessionExtras { files: Some(viewer_files.clone()), ..Default::default() };
+    let (mut v, ch) = tokio::join!(start_viewer_with(&viewer_dev, host_id, viewer_extras), host_side);
+    let (_stop_tx, stop_rx) = watch::channel(false);
+    let cap = FakeCapturer { width: 64, height: 64, bgra: Arc::new(Mutex::new([0, 0, 0, 255])) };
+    let host_extras = SessionExtras { files: Some(host_files.clone()), ..Default::default() };
+    let host_task = tokio::spawn(host::serve(
+        ch,
+        Box::new(cap),
+        Box::new(RecordingInjector::default()),
+        host_extras,
+        HostSettings::default(),
+        stop_rx,
+    ));
+    tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
+
+    // Viewer → host: 3 MB (many chunks) with a marker the relay must never see.
+    let mut big: Vec<u8> = (0..3_000_000u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
+    big[1_000_000..1_000_020].copy_from_slice(b"FILE-CONTENT-MARKER!");
+    std::fs::write(src.join("backup.tar"), &big).unwrap();
+    send_when_ready(&viewer_files, &src.join("backup.tar")).await;
+    match transfer_outcome(&mut host_ev).await {
+        TransferEvent::Completed { direction: Direction::Download, path: Some(p), name, .. } => {
+            assert_eq!(name, "backup.tar");
+            assert_eq!(p, host_dl.join("backup.tar"));
+            assert_eq!(std::fs::read(&p).unwrap(), big);
+        }
+        other => panic!("host: {other:?}"),
+    }
+    assert!(matches!(
+        transfer_outcome(&mut viewer_ev).await,
+        TransferEvent::Completed { direction: Direction::Upload, .. }
+    ));
+
+    // Host → viewer: the viewer is asked and declines.
+    std::fs::write(src.join(".profile"), b"export SECRET=1\n").unwrap();
+    send_when_ready(&host_files, &src.join(".profile")).await;
+    let TransferEvent::Offered { id, name, size } = transfer_outcome(&mut viewer_ev).await else { panic!("no offer") };
+    assert_eq!((name.as_str(), size), ("profile", 16), "hidden-file names are made visible");
+    viewer_files.respond(id, false);
+    match transfer_outcome(&mut host_ev).await {
+        TransferEvent::Failed { direction: Direction::Upload, reason, .. } => {
+            assert!(reason.contains("declined"), "{reason}")
+        }
+        other => panic!("host: {other:?}"),
+    }
+    assert!(!viewer_dl.join("profile").exists());
+
+    // ...and accepts the second time. A second copy of a name does not overwrite the first.
+    for expected in ["profile", "profile (2)"] {
+        send_when_ready(&host_files, &src.join(".profile")).await;
+        let TransferEvent::Offered { id, .. } = transfer_outcome(&mut viewer_ev).await else { panic!("no offer") };
+        viewer_files.respond(id, true);
+        match transfer_outcome(&mut viewer_ev).await {
+            TransferEvent::Completed { direction: Direction::Download, path: Some(p), .. } => {
+                assert_eq!(p, viewer_dl.join(expected));
+                assert_eq!(std::fs::read(&p).unwrap(), b"export SECRET=1\n");
+            }
+            other => panic!("viewer: {other:?}"),
+        }
+        assert!(matches!(
+            transfer_outcome(&mut host_ev).await,
+            TransferEvent::Completed { direction: Direction::Upload, .. }
+        ));
+    }
+    // No partial files are left behind.
+    let leftovers: Vec<_> = std::fs::read_dir(&viewer_dl).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(leftovers.len(), 2, "{leftovers:?}");
+
+    drop(v.input);
+    tokio::time::timeout(T, v.task).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(T, host_task).await.unwrap().unwrap().unwrap();
+    assert!(!ts.relay_contains(b"FILE-CONTENT-MARKER!"));
+    assert!(!ts.relay_contains(b"backup.tar"));
+    // Once the session is over, nothing can be sent.
+    assert!(viewer_files.send_file(&src.join("backup.tar")).is_err());
+    std::fs::remove_dir_all(&tmp).unwrap();
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn interrupted_transfers_leave_no_partial_files() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let tmp = std::env::temp_dir().join(format!("somedesk-files-{}-{}", std::process::id(), rand::random::<u32>()));
+    let (host_dl, src) = (tmp.join("host-dl"), tmp.join("src"));
+    std::fs::create_dir_all(&src).unwrap();
+    let (host_sink, mut host_ev) = transfer_events();
+    let host_files = FileTransfers::new(host_dl.clone(), AcceptPolicy::Always, host_sink);
+    let (viewer_sink, _viewer_ev) = transfer_events();
+    let viewer_files = FileTransfers::new(tmp.join("viewer-dl"), AcceptPolicy::Ask, viewer_sink);
+
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let viewer_extras = SessionExtras { files: Some(viewer_files.clone()), ..Default::default() };
+    let (mut v, ch) = tokio::join!(start_viewer_with(&viewer_dev, host_id, viewer_extras), host_side);
+    let (_stop_tx, stop_rx) = watch::channel(false);
+    let cap = FakeCapturer { width: 64, height: 64, bgra: Arc::new(Mutex::new([0, 0, 0, 255])) };
+    let host_extras = SessionExtras { files: Some(host_files.clone()), ..Default::default() };
+    let host_task = tokio::spawn(host::serve(
+        ch,
+        Box::new(cap),
+        Box::new(RecordingInjector::default()),
+        host_extras,
+        HostSettings::default(),
+        stop_rx,
+    ));
+    tokio::time::timeout(T, v.accepted.recv()).await.unwrap().unwrap();
+
+    std::fs::write(src.join("huge.bin"), vec![7u8; 64 * 1024 * 1024]).unwrap();
+    send_when_ready(&viewer_files, &src.join("huge.bin")).await;
+    // Wait until the host is receiving, then end the session mid-transfer.
+    loop {
+        match tokio::time::timeout(T, host_ev.recv()).await.unwrap().unwrap() {
+            TransferEvent::Progress { done, .. } if done > 0 => break,
+            TransferEvent::Completed { .. } => panic!("finished too quickly to interrupt"),
+            _ => {}
+        }
+    }
+    drop(v.input);
+    tokio::time::timeout(T, v.task).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(T, host_task).await.unwrap().unwrap().unwrap();
+    match transfer_outcome(&mut host_ev).await {
+        TransferEvent::Failed { direction: Direction::Download, .. } => {}
+        other => panic!("host: {other:?}"),
+    }
+    let left: Vec<_> = std::fs::read_dir(&host_dl).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert!(left.is_empty(), "partial files left behind: {left:?}");
+    std::fs::remove_dir_all(&tmp).unwrap();
     ts.stop().await;
 }

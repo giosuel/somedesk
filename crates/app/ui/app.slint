@@ -2,10 +2,10 @@ import { Theme } from "theme.slint";
 import { LoginPage } from "login.slint";
 import { HomePage, DeviceItem } from "home.slint";
 import { SessionPage } from "session.slint";
-import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast } from "dialogs.slint";
+import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
 
-export { DeviceItem }
+export { DeviceItem, TransferItem }
 
 export enum Page { starting, login, home, session }
 
@@ -95,6 +95,17 @@ export component AppWindow inherits Window {
     callback recovery-key-copy();
     callback recovery-key-done();
 
+    // Files
+    in property <[TransferItem]> transfers;
+    in property <bool> file-offer-visible;
+    in property <string> file-offer-peer;
+    in property <string> file-offer-name;
+    in property <string> file-offer-size;
+    callback send-files();
+    callback cancel-transfer(int, bool);
+    callback clear-transfers();
+    callback file-offer-answer(bool);
+
     // Toast
     in property <string> toast-text;
     in property <bool> toast-error;
@@ -143,6 +154,7 @@ export component AppWindow inherits Window {
         share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
         sign-out => { root.sign-out(); }
         stop-hosting => { root.stop-hosting(); }
+        send-files => { root.send-files(); }
     }
 
     if root.page == Page.session: SessionPage {
@@ -155,6 +167,7 @@ export component AppWindow inherits Window {
         resolution: root.resolution;
         view-only: root.session-view-only;
         disconnect => { root.disconnect(); }
+        send-files => { root.send-files(); }
         pointer-moved(x, y, w, h) => { root.pointer-moved(x, y, w, h); }
         pointer-button(b, d) => { root.pointer-button(b, d); }
         scroll(dx, dy) => { root.scroll(dx, dy); }
@@ -176,6 +189,21 @@ export component AppWindow inherits Window {
         answer(ok) => { root.incoming-answer(ok); }
     }
 
+    if root.transfers.length > 0 && (root.page == Page.session || root.page == Page.home): TransfersPanel {
+        x: parent.width - self.width - 20px;
+        y: parent.height - self.height - 20px;
+        items: root.transfers;
+        cancel(id, up) => { root.cancel-transfer(id, up); }
+        clear => { root.clear-transfers(); }
+    }
+
+    if root.file-offer-visible: FileOfferDialog {
+        peer: root.file-offer-peer;
+        name: root.file-offer-name;
+        size: root.file-offer-size;
+        answer(ok) => { root.file-offer-answer(ok); }
+    }
+
     if root.recovery-key-visible: RecoveryKeyDialog {
         key: root.recovery-key;
         reason: root.recovery-key-reason;
@@ -185,7 +213,9 @@ export component AppWindow inherits Window {
     }
 
     if root.toast-text != "": Toast {
-        x: (parent.width - self.width) / 2;
+        // Keep clear of the transfers panel in the bottom-right corner.
+        x: root.transfers.length > 0 ? Math.min((parent.width - self.width) / 2, parent.width - self.width - 380px)
+            : (parent.width - self.width) / 2;
         y: parent.height - self.height - 24px;
         text: root.toast-text;
         error: root.toast-error;

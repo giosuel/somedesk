@@ -2,9 +2,8 @@
 
 use crate::clipboard::ClipboardSync;
 use crate::session::Channel;
-use crate::{ClientError, Result};
+use crate::{ClientError, Result, SessionExtras};
 use somedesk_codec::{H264Decoder, RgbFrame};
-use somedesk_platform::Clipboard;
 use somedesk_proto::session::SessionMsg;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -37,14 +36,16 @@ pub enum SessionEnd {
 }
 
 /// Runs the viewer until the session ends. Input events to forward (pointer, keys, scroll) are
-/// read from `input`; dropping its sender ends the session. With a `clipboard`, clipboard text is
-/// shared in both directions, starting with what the viewer's clipboard holds now.
+/// read from `input`; dropping its sender ends the session. With a clipboard in `extras`,
+/// clipboard text is shared in both directions, starting with what the viewer's clipboard holds
+/// now; with file transfers, files can be sent either way.
 pub async fn run(
     ch: Channel,
     events: EventSink,
     mut input: mpsc::UnboundedReceiver<SessionMsg>,
-    clipboard: Option<Box<dyn Clipboard>>,
+    extras: SessionExtras,
 ) -> Result<SessionEnd> {
+    let SessionExtras { clipboard, files } = extras;
     let Channel { mut sender, mut receiver, .. } = ch;
 
     let first = tokio::time::timeout(ACCEPT_TIMEOUT, receiver.recv::<SessionMsg>())
@@ -67,15 +68,18 @@ pub async fn run(
             .expect("spawn decoder thread")
     };
     let clipboard = clipboard.map(|c| ClipboardSync::start(c, ctrl_tx.clone(), true));
+    let (mut file_rx, _no_files) = crate::file_lane(&files);
 
     let start = Instant::now();
     let send_loop = async {
         let mut ping = tokio::time::interval(Duration::from_secs(2));
         loop {
             let msg = tokio::select! {
+                biased;
                 m = ctrl_rx.recv() => m,
                 m = input.recv() => match m { Some(m) => Some(m), None => return Ok::<_, ClientError>(()) },
                 _ = ping.tick() => Some(SessionMsg::Ping { t: start.elapsed().as_micros() as u64 }),
+                m = file_rx.recv() => m,
             };
             if let Some(msg) = msg {
                 sender.send(&msg).await?;
@@ -105,16 +109,30 @@ pub async fn run(
                         c.apply(text);
                     }
                 }
-                Some(other) => tracing::debug!("ignoring unexpected message from host: {other:?}"),
+                Some(other) => {
+                    let handled = match &files {
+                        Some(f) => f.handle(&other).await,
+                        None => false,
+                    };
+                    if !handled {
+                        tracing::debug!("ignoring unexpected message from host: {other:?}")
+                    }
+                }
             }
         }
     };
-    let result = tokio::select! {
+    let result = match tokio::select! {
         r = send_loop => r,
         r = recv_loop => r,
+    } {
+        Err(e) if e.is_peer_gone() => Ok(()),
+        r => r,
     };
     let _ = sender.send(&SessionMsg::Bye).await;
     let _ = sender.into_inner().finish();
+    if let Some(f) = &files {
+        f.detach().await;
+    }
     drop(video_tx);
     let clipboard = clipboard.map(ClipboardSync::stop);
     let _ = tokio::task::spawn_blocking(move || {
