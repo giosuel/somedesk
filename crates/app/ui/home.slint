@@ -92,6 +92,7 @@ export component HomePage inherits Rectangle {
     callback share-clipboard-changed(bool);
     callback sign-out();
     callback stop-hosting();
+    callback send-files();
     background: Theme.bg;
 
     VerticalLayout {
@@ -159,6 +160,13 @@ export component HomePage inherits Rectangle {
                     vertical-alignment: center;
                 }
                 Rectangle { horizontal-stretch: 1; }
+                GhostButton {
+                    y: (parent.height - self.height) / 2;
+                    button-height: 32px;
+                    text: "Send files";
+                    icon: Icons.upload;
+                    clicked => { root.send-files(); }
+                }
                 GhostButton {
                     y: (parent.height - self.height) / 2;
                     button-height: 32px;

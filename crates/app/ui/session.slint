@@ -11,6 +11,7 @@ export component SessionPage inherits Rectangle {
     in property <string> resolution;
     in property <bool> view-only;
     callback disconnect();
+    callback send-files();
     callback pointer-moved(length, length, length, length);
     callback pointer-button(int, bool);
     callback scroll(length, length);
@@ -73,6 +74,13 @@ export component SessionPage inherits Rectangle {
                     Text { text: stat.value; color: Theme.text; font-size: 12px; font-family: Theme.mono; horizontal-alignment: right; }
                 }
                 Rectangle { width: 4px; }
+                GhostButton {
+                    y: (parent.height - self.height) / 2;
+                    button-height: 34px;
+                    text: "Send files";
+                    icon: Icons.upload;
+                    clicked => { root.send-files(); }
+                }
                 PrimaryButton {
                     y: (parent.height - self.height) / 2;
                     height: 34px;

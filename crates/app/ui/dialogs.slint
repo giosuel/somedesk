@@ -234,3 +234,155 @@ export component RecoveryKeyDialog inherits Backdrop {
         }
     }
 }
+
+export struct TransferItem {
+    id: int,
+    upload: bool,
+    name: string,
+    detail: string,
+    /// 0..1
+    progress: float,
+    /// 0 waiting for the other side, 1 running, 2 done, 3 failed
+    state: int,
+}
+
+/// Floating list of file transfers in this session.
+export component TransfersPanel inherits Rectangle {
+    in property <[TransferItem]> items;
+    callback cancel(int, bool);
+    callback clear();
+    width: 340px;
+    height: body.preferred-height;
+    border-radius: 14px;
+    background: #171b25f5;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #00000090;
+    body := VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px;
+            Icon { y: (parent.height - self.height) / 2; d: Icons.file; size: 15px; color: Theme.muted; stroke: 1.8px; }
+            Text { text: "File transfers"; color: Theme.text; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: "Clear";
+                color: clear-ta.has-hover ? Theme.text : Theme.muted;
+                font-size: 12px;
+                vertical-alignment: center;
+                clear-ta := TouchArea { mouse-cursor: pointer; clicked => { root.clear(); } }
+            }
+        }
+        for item in root.items: HorizontalLayout {
+            spacing: 10px;
+            Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 30px;
+                height: 30px;
+                border-radius: 8px;
+                background: item.state == 3 ? Theme.danger-soft : item.state == 2 ? Theme.success-soft : Theme.accent-soft;
+                Icon {
+                    d: item.upload ? Icons.upload : Icons.download;
+                    size: 15px;
+                    stroke: 2px;
+                    color: item.state == 3 ? Theme.danger : item.state == 2 ? Theme.success : #b9b1ff;
+                }
+            }
+            VerticalLayout {
+                spacing: 4px;
+                alignment: center;
+                Text { text: item.name; color: Theme.text; font-size: 12px; font-weight: 600; overflow: elide; }
+                if item.state <= 1: Rectangle {
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.border;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * Math.max(0.02, item.progress);
+                        height: parent.height;
+                        border-radius: 2px;
+                        background: Theme.accent-gradient;
+                        animate width { duration: 150ms; }
+                    }
+                }
+                Text {
+                    text: item.detail;
+                    color: item.state == 3 ? Theme.danger : Theme.muted;
+                    font-size: 11px;
+                    overflow: elide;
+                }
+            }
+            if item.state <= 1: Rectangle {
+                y: (parent.height - self.height) / 2;
+                width: 24px;
+                height: 24px;
+                border-radius: 6px;
+                background: x-ta.has-hover ? Theme.card-hover : transparent;
+                Icon { d: Icons.x; size: 13px; color: Theme.muted; }
+                x-ta := TouchArea { mouse-cursor: pointer; clicked => { root.cancel(item.id, item.upload); } }
+            }
+        }
+    }
+}
+
+/// The other computer wants to send us a file.
+export component FileOfferDialog inherits Backdrop {
+    in property <string> peer;
+    in property <string> name;
+    in property <string> size;
+    callback answer(bool);
+    Card {
+        width: 420px;
+        height: body.preferred-height;
+        body := VerticalLayout {
+            padding: 26px;
+            spacing: 16px;
+            HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    width: 46px;
+                    height: 46px;
+                    border-radius: 13px;
+                    background: Theme.accent-soft;
+                    Icon { d: Icons.download; size: 22px; color: #b9b1ff; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text { text: "Receive a file?"; color: Theme.text; font-size: 17px; font-weight: 700; }
+                    Text { text: root.peer + " wants to send you a file."; color: Theme.muted; font-size: 13px; }
+                }
+            }
+            Rectangle {
+                border-radius: 10px;
+                background: Theme.input-bg;
+                border-width: 1px;
+                border-color: Theme.border;
+                HorizontalLayout {
+                    padding: 12px;
+                    spacing: 10px;
+                    Icon { y: (parent.height - self.height) / 2; d: Icons.file; size: 18px; color: Theme.muted; stroke: 1.8px; }
+                    VerticalLayout {
+                        spacing: 2px;
+                        Text { text: root.name; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
+                        Text { text: root.size; color: Theme.muted; font-size: 12px; }
+                    }
+                }
+            }
+            Text {
+                text: "Only accept files you expect. Received files are saved to your SomeDesk downloads folder.";
+                color: Theme.subtle;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: end;
+                GhostButton { width: 110px; text: "Decline"; clicked => { root.answer(false); } }
+                PrimaryButton { width: 120px; text: "Save"; clicked => { root.answer(true); } }
+            }
+        }
+    }
+}

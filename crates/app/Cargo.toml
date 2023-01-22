@@ -25,6 +25,8 @@ tracing-subscriber.workspace = true
 clap.workspace = true
 hex.workspace = true
 slint = { version = "1.18", features = ["unstable-winit-030"] }
+dirs = "6"
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [build-dependencies]
 slint-build = "1.18"

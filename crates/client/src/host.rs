@@ -2,9 +2,9 @@
 
 use crate::clipboard::ClipboardSync;
 use crate::session::Channel;
-use crate::{ClientError, Result};
+use crate::{ClientError, Result, SessionExtras};
 use somedesk_codec::{EncoderSettings, H264Encoder};
-use somedesk_platform::{Capturer, Clipboard, Injector};
+use somedesk_platform::{Capturer, Injector};
 use somedesk_proto::session::{SessionMsg, POINTER_MAX};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -46,12 +46,13 @@ pub async fn reject(ch: Channel, reason: &str) {
 }
 
 /// Accepts the session and serves it until the viewer leaves, an error occurs, or `stop`
-/// becomes `true`. With a `clipboard`, clipboard text is shared in both directions.
+/// becomes `true`. With a clipboard in `extras`, clipboard text is shared in both directions;
+/// with file transfers, files can be sent either way.
 pub async fn serve(
     ch: Channel,
     capturer: Box<dyn Capturer>,
     injector: Box<dyn Injector>,
-    clipboard: Option<Box<dyn Clipboard>>,
+    extras: SessionExtras,
     settings: HostSettings,
     mut stop: watch::Receiver<bool>,
 ) -> Result<HostStats> {
@@ -81,7 +82,9 @@ pub async fn serve(
         .spawn(move || inject_loop(injector, input_rx))
         .expect("spawn inject thread");
     // The host's existing clipboard is only shared once the user there copies something new.
+    let SessionExtras { clipboard, files } = extras;
     let clipboard = clipboard.map(|c| ClipboardSync::start(c, ctrl_tx.clone(), false));
+    let (mut file_rx, _no_files) = crate::file_lane(&files);
 
     let mut stats = HostStats::default();
     let send_loop = async {
@@ -90,6 +93,7 @@ pub async fn serve(
                 biased;
                 m = ctrl_rx.recv() => m,
                 m = video_rx.recv() => m,
+                m = file_rx.recv() => m,
             };
             let Some(msg) = msg else { break };
             if let SessionMsg::Video { data, .. } = &msg {
@@ -126,7 +130,13 @@ pub async fn serve(
                     }
                 }
                 Some(other) => {
-                    tracing::debug!("ignoring unexpected message from viewer: {other:?}")
+                    let handled = match &files {
+                        Some(f) => f.handle(&other).await,
+                        None => false,
+                    };
+                    if !handled {
+                        tracing::debug!("ignoring unexpected message from viewer: {other:?}")
+                    }
                 }
             }
         }
@@ -136,9 +146,18 @@ pub async fn serve(
         r = recv_loop => r,
         _ = stop.wait_for(|s| *s) => Ok(()),
     };
+    // The viewer may leave while we are still sending (e.g. during a file transfer); that is an
+    // ordinary end of the session.
+    let result = match result {
+        Err(e) if e.is_peer_gone() => Ok(()),
+        r => r,
+    };
     running.store(false, Ordering::Relaxed);
     let _ = sender.send(&SessionMsg::Bye).await;
     let _ = sender.into_inner().finish();
+    if let Some(f) = &files {
+        f.detach().await;
+    }
     // Closing the channels unblocks both threads: the capture thread may be waiting in
     // `blocking_send`, and the inject thread exits when its input channel closes.
     drop(video_rx);

@@ -4,8 +4,8 @@ Self-hosted remote desktop (in the spirit of AnyDesk/TeamViewer) written in Rust
 end-to-end encrypted sessions and zero-knowledge password login.
 
 **Status:** Linux ↔ Linux remote control works end to end through the relay, on X11 and on
-Wayland (GNOME/KDE via the desktop portal), with clipboard sharing and password recovery.
-Windows and macOS backends, file transfer and P2P are next.
+Wayland (GNOME/KDE via the desktop portal), with clipboard sharing, file transfer in both
+directions and password recovery.
 
 ## Architecture
 
@@ -47,6 +47,10 @@ Windows and macOS backends, file transfer and P2P are next.
 * **Clipboard:** text is shared inside the encrypted session in both directions (switchable in
   the app). The host's clipboard is only sent after someone copies something during the
   session, never what it held before.
+* **File transfer:** files travel inside the encrypted session. The receiver writes to a hidden
+  partial file and only keeps it if size and SHA-256 match; names are sanitized so a peer cannot
+  write outside `~/Downloads/SomeDesk`. The host saves files from the viewer directly (the viewer
+  controls it anyway); the viewer is asked before accepting each file from the host.
 * **What the server does see:** who connects to whom, when, and how much data flows.
 * **Recovery key:** a second copy of the identity key is sealed under a 160-bit recovery key that
   is shown once at sign-up (`XXXX-XXXX-…`, with a checksum that catches typos). To reset a

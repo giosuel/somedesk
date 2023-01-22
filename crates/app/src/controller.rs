@@ -4,10 +4,11 @@
 //! back with `upgrade_in_event_loop`. Locks are never held across an `.await`.
 
 use crate::keymap::keysym_for;
-use crate::{AppWindow, DeviceItem, Page};
+use crate::{AppWindow, DeviceItem, Page, TransferItem};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use somedesk_client::credentials::DeviceCredentials;
+use somedesk_client::files::{AcceptPolicy, Direction, FileTransfers, TransferEvent};
 use somedesk_client::host::{self, HostSettings};
 use somedesk_client::server::ServerConn;
 use somedesk_client::session;
@@ -65,6 +66,46 @@ struct State {
     toast_generation: u64,
     /// Keeps copied text available on X11, where the copying app must serve the clipboard.
     copy_clipboard: Option<Box<dyn somedesk_platform::Clipboard>>,
+    /// File transfers of the running session.
+    files: Option<FileTransfers>,
+    transfers: Vec<TransferRow>,
+    /// Files the peer offered that we have not answered yet, oldest first.
+    file_offers: std::collections::VecDeque<(u32, String, u64)>,
+}
+
+struct TransferRow {
+    id: u32,
+    upload: bool,
+    name: String,
+    size: u64,
+    done: u64,
+    /// 0 waiting, 1 running, 2 done, 3 failed (as in the UI).
+    state: i32,
+    detail: String,
+}
+
+/// "1.4 MB" etc.
+fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = bytes as f64;
+    let mut unit = 0;
+    while v >= 1000.0 && unit < UNITS.len() - 1 {
+        v /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{v:.1} {}", UNITS[unit])
+    }
+}
+
+/// Where received files go: `~/Downloads/SomeDesk`.
+fn download_dir() -> PathBuf {
+    dirs::download_dir()
+        .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("SomeDesk")
 }
 
 struct Inner {
@@ -231,6 +272,22 @@ impl Controller {
             c.0.state.lock().unwrap().settings.share_clipboard = v;
             c.save_settings();
         });
+        let c = self.clone();
+        ui.on_send_files(move || c.pick_and_send_files());
+        let c = self.clone();
+        ui.on_cancel_transfer(move |id, upload| {
+            let files = c.0.state.lock().unwrap().files.clone();
+            if let Some(f) = files {
+                f.cancel(id as u32, if upload { Direction::Upload } else { Direction::Download });
+            }
+        });
+        let c = self.clone();
+        ui.on_clear_transfers(move || {
+            c.0.state.lock().unwrap().transfers.retain(|t| t.state <= 1);
+            c.publish_transfers();
+        });
+        let c = self.clone();
+        ui.on_file_offer_answer(move |ok| c.answer_file_offer(ok));
         let c = self.clone();
         ui.on_recovery_key_copy(move || c.copy_recovery_key());
         let c = self.clone();
@@ -608,7 +665,11 @@ impl Controller {
         }
         let clipboard = self.clipboard();
         let settings = HostSettings { view_only: !can_control, ..Default::default() };
-        let result = host::serve(ch, capturer, injector, clipboard, settings, stop_rx).await;
+        // The viewer controls this computer anyway, so files from it are saved without asking.
+        let files = self.start_transfers(AcceptPolicy::Always, &label);
+        let extras = somedesk_client::SessionExtras { clipboard, files: Some(files) };
+        let result = host::serve(ch, capturer, injector, extras, settings, stop_rx).await;
+        self.end_transfers();
         self.0.state.lock().unwrap().host_stop = None;
         self.0.busy.store(false, Ordering::SeqCst);
         self.ui(|ui| ui.set_hosting_active(false));
@@ -751,7 +812,170 @@ impl Controller {
                 this.show_frame(frame);
             }
         });
-        viewer::run(ch, sink, input_rx, self.clipboard()).await
+        // Files from the host could be anything, so the user decides about each one.
+        let files = self.start_transfers(AcceptPolicy::Ask, &device_label(&peer));
+        let extras = somedesk_client::SessionExtras { clipboard: self.clipboard(), files: Some(files) };
+        let result = viewer::run(ch, sink, input_rx, extras).await;
+        self.end_transfers();
+        result
+    }
+
+    // ------------------------------------------------------------------ files
+
+    fn start_transfers(&self, policy: AcceptPolicy, peer: &str) -> FileTransfers {
+        let this = self.clone();
+        let peer = peer.to_owned();
+        let files = FileTransfers::new(download_dir(), policy, Arc::new(move |ev| this.on_transfer(ev, &peer)));
+        let mut st = self.0.state.lock().unwrap();
+        st.files = Some(files.clone());
+        st.transfers.clear();
+        st.file_offers.clear();
+        drop(st);
+        self.publish_transfers();
+        files
+    }
+
+    fn end_transfers(&self) {
+        let mut st = self.0.state.lock().unwrap();
+        st.files = None;
+        st.file_offers.clear();
+        // Finished transfers stay visible until cleared; nothing is running any more.
+        st.transfers.retain(|t| t.state >= 2);
+        drop(st);
+        self.publish_transfers();
+        self.ui(|ui| ui.set_file_offer_visible(false));
+    }
+
+    fn pick_and_send_files(&self) {
+        let Some(files) = self.0.state.lock().unwrap().files.clone() else {
+            return;
+        };
+        let this = self.clone();
+        self.0.rt.spawn(async move {
+            let picked = rfd::AsyncFileDialog::new().set_title("Send files").pick_files().await;
+            for f in picked.unwrap_or_default() {
+                if let Err(e) = files.send_file(f.path()) {
+                    this.toast(format!("Cannot send {}: {e}", f.file_name()), true);
+                }
+            }
+        });
+    }
+
+    fn on_transfer(&self, ev: TransferEvent, peer: &str) {
+        let mut st = self.0.state.lock().unwrap();
+        let mut show_offer = false;
+        let mut toast = None;
+        match ev {
+            TransferEvent::Offered { id, name, size } => {
+                st.file_offers.push_back((id, name, size));
+                show_offer = st.file_offers.len() == 1;
+            }
+            TransferEvent::Started { id, direction, name, size } => {
+                let upload = direction == Direction::Upload;
+                st.transfers.retain(|t| !(t.id == id && t.upload == upload));
+                let detail = if upload { "Waiting for the other side…".to_string() } else { format_size(size) };
+                st.transfers.push(TransferRow { id, upload, name, size, done: 0, state: i32::from(!upload), detail });
+            }
+            TransferEvent::Progress { id, direction, done, total } => {
+                let upload = direction == Direction::Upload;
+                if let Some(t) = st.transfers.iter_mut().find(|t| t.id == id && t.upload == upload) {
+                    t.state = 1;
+                    t.done = done;
+                    t.detail = format!("{} of {}", format_size(done), format_size(total));
+                }
+            }
+            TransferEvent::Completed { id, direction, name, path } => {
+                let upload = direction == Direction::Upload;
+                if let Some(t) = st.transfers.iter_mut().find(|t| t.id == id && t.upload == upload) {
+                    t.state = 2;
+                    t.done = t.size;
+                    t.detail = if upload {
+                        format!("Sent · {}", format_size(t.size))
+                    } else {
+                        format!(
+                            "Saved to {}",
+                            path.as_ref().and_then(|p| p.parent()).map(|p| p.display().to_string()).unwrap_or_default()
+                        )
+                    };
+                }
+                if !upload {
+                    toast = Some((format!("Received {name} from {peer}"), false));
+                }
+            }
+            TransferEvent::Failed { id, direction, name, reason } => {
+                let upload = direction == Direction::Upload;
+                match st.transfers.iter_mut().find(|t| t.id == id && t.upload == upload) {
+                    Some(t) => {
+                        t.state = 3;
+                        t.detail = reason;
+                    }
+                    None => {
+                        st.transfers.push(TransferRow { id, upload, name, size: 0, done: 0, state: 3, detail: reason })
+                    }
+                }
+                // An offer we never answered disappears with the transfer.
+                if !upload {
+                    let before = st.file_offers.front().map(|o| o.0);
+                    st.file_offers.retain(|o| o.0 != id);
+                    show_offer = before != st.file_offers.front().map(|o| o.0);
+                }
+            }
+        }
+        drop(st);
+        self.publish_transfers();
+        if show_offer {
+            self.show_file_offer(peer);
+        }
+        if let Some((text, error)) = toast {
+            self.toast(text, error);
+        }
+    }
+
+    fn show_file_offer(&self, peer: &str) {
+        let next = self.0.state.lock().unwrap().file_offers.front().cloned();
+        let peer = peer.to_owned();
+        self.ui(move |ui| match next {
+            Some((_, name, size)) => {
+                ui.set_file_offer_peer(peer.into());
+                ui.set_file_offer_name(name.into());
+                ui.set_file_offer_size(format_size(size).into());
+                ui.set_file_offer_visible(true);
+                bring_to_front(ui);
+            }
+            None => ui.set_file_offer_visible(false),
+        });
+    }
+
+    fn answer_file_offer(&self, accept: bool) {
+        let (offer, files, peer) = {
+            let mut st = self.0.state.lock().unwrap();
+            let peer = self.0.ui.upgrade().map(|ui| ui.get_file_offer_peer().to_string()).unwrap_or_default();
+            (st.file_offers.pop_front(), st.files.clone(), peer)
+        };
+        if let (Some((id, ..)), Some(files)) = (offer, files) {
+            files.respond(id, accept);
+        }
+        self.show_file_offer(&peer);
+    }
+
+    fn publish_transfers(&self) {
+        let items: Vec<TransferItem> = self
+            .0
+            .state
+            .lock()
+            .unwrap()
+            .transfers
+            .iter()
+            .map(|t| TransferItem {
+                id: t.id as i32,
+                upload: t.upload,
+                name: t.name.clone().into(),
+                detail: t.detail.clone().into(),
+                progress: if t.size == 0 { 0.0 } else { (t.done as f64 / t.size as f64) as f32 },
+                state: t.state,
+            })
+            .collect();
+        self.ui(move |ui| ui.set_transfers(ModelRc::new(VecModel::from(items))));
     }
 
     /// The system clipboard, if clipboard sharing is enabled and the clipboard is available.
