@@ -41,9 +41,14 @@ directions and password recovery.
 * **Sessions:** `Noise_XX_25519_ChaChaPoly_BLAKE2s` between the two devices, bound to the session
   id, with certificates exchanged inside the encrypted handshake. Each side checks the peer's
   certificate chain itself. The relay forwards ciphertext only (verified by tests that tap it).
-* **Interception check:** both sides display identity fingerprints. Connections from your own
-  account are marked as verified; the host must accept every connection unless
-  “unattended access for my own devices” is enabled.
+* **Interception check:** both sides display identity fingerprints. Each client also remembers
+  the identity key of everyone it has connected with (trust on first use, like SSH) and warns
+  loudly if it changes, which is what a malicious server would have to do to get in between.
+  The viewer stops before connecting; the host's prompt turns into a warning.
+* **Who may connect:** the host accepts every connection unless it comes from one of its own
+  account's devices with “unattended access” on, or from a device the user ticked “let this device
+  connect without asking” for. That permission is tied to the device key *and* the user's identity
+  key, and can be revoked under Contacts.
 * **Clipboard:** text is shared inside the encrypted session in both directions (switchable in
   the app). The host's clipboard is only sent after someone copies something during the
   session, never what it held before.

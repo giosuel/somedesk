@@ -4,6 +4,7 @@ import { Icon, PrimaryButton, GhostButton, Pill, Spinner } from "widgets.slint";
 export component SessionPage inherits Rectangle {
     in property <string> peer;
     in property <string> peer-id;
+    in property <string> peer-fingerprint;
     in property <image> frame;
     in property <bool> has-frame;
     in property <string> latency;
@@ -40,7 +41,12 @@ export component SessionPage inherits Rectangle {
                     alignment: center;
                     spacing: 1px;
                     Text { text: root.peer; color: Theme.text; font-size: 13px; font-weight: 600; }
-                    Text { text: root.peer-id; color: Theme.muted; font-size: 11px; font-family: Theme.mono; }
+                    Text {
+                        text: root.peer-id + "  ·  " + root.peer-fingerprint;
+                        color: Theme.muted;
+                        font-size: 11px;
+                        font-family: Theme.mono;
+                    }
                 }
                 Rectangle {
                     y: (parent.height - self.height) / 2;

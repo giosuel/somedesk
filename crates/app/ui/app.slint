@@ -1,11 +1,11 @@
 import { Theme } from "theme.slint";
 import { LoginPage } from "login.slint";
-import { HomePage, DeviceItem } from "home.slint";
+import { HomePage, DeviceItem, ContactItem } from "home.slint";
 import { SessionPage } from "session.slint";
-import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog } from "dialogs.slint";
+import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
 
-export { DeviceItem, TransferItem }
+export { DeviceItem, TransferItem, ContactItem, TrustLevel }
 
 export enum Page { starting, login, home, session }
 
@@ -43,6 +43,9 @@ export component AppWindow inherits Window {
     in property <bool> online;
     in property <string> status-text;
     in property <[DeviceItem]> devices;
+    in property <[ContactItem]> contacts;
+    callback revoke-contact(string);
+    callback forget-contact(string);
     in property <bool> connect-busy;
     in-out property <string> connect-id;
     in-out property <bool> auto-accept;
@@ -63,7 +66,9 @@ export component AppWindow inherits Window {
     in property <string> incoming-user-letter;
     in property <string> incoming-device;
     in property <string> incoming-fingerprint;
-    in property <bool> incoming-same-account;
+    in property <TrustLevel> incoming-trust;
+    in property <string> incoming-previous-fingerprint;
+    in-out property <bool> incoming-always-allow;
     in property <string> incoming-note;
     callback incoming-answer(bool);
 
@@ -75,6 +80,7 @@ export component AppWindow inherits Window {
     // Session
     in property <string> session-peer;
     in property <string> session-peer-id;
+    in property <string> session-peer-fingerprint;
     in property <image> remote-frame;
     in property <bool> has-frame;
     in property <string> latency;
@@ -105,6 +111,13 @@ export component AppWindow inherits Window {
     callback cancel-transfer(int, bool);
     callback clear-transfers();
     callback file-offer-answer(bool);
+
+    // The host we are connecting to has a new identity
+    in property <bool> identity-changed-visible;
+    in property <string> identity-changed-user;
+    in property <string> identity-changed-fingerprint;
+    in property <string> identity-changed-previous;
+    callback identity-changed-answer(bool);
 
     // Toast
     in property <string> toast-text;
@@ -143,6 +156,9 @@ export component AppWindow inherits Window {
         online: root.online;
         status-text: root.status-text;
         devices: root.devices;
+        contacts: root.contacts;
+        revoke-contact(u) => { root.revoke-contact(u); }
+        forget-contact(u) => { root.forget-contact(u); }
         connect-busy: root.connect-busy;
         connect-id <=> root.connect-id;
         auto-accept <=> root.auto-accept;
@@ -160,6 +176,7 @@ export component AppWindow inherits Window {
     if root.page == Page.session: SessionPage {
         peer: root.session-peer;
         peer-id: root.session-peer-id;
+        peer-fingerprint: root.session-peer-fingerprint;
         frame: root.remote-frame;
         has-frame: root.has-frame;
         latency: root.latency;
@@ -184,7 +201,9 @@ export component AppWindow inherits Window {
         user-letter: root.incoming-user-letter;
         device: root.incoming-device;
         fingerprint: root.incoming-fingerprint;
-        same-account: root.incoming-same-account;
+        trust: root.incoming-trust;
+        previous-fingerprint: root.incoming-previous-fingerprint;
+        always-allow <=> root.incoming-always-allow;
         note: root.incoming-note;
         answer(ok) => { root.incoming-answer(ok); }
     }
@@ -202,6 +221,13 @@ export component AppWindow inherits Window {
         name: root.file-offer-name;
         size: root.file-offer-size;
         answer(ok) => { root.file-offer-answer(ok); }
+    }
+
+    if root.identity-changed-visible: IdentityChangedDialog {
+        user: root.identity-changed-user;
+        fingerprint: root.identity-changed-fingerprint;
+        previous-fingerprint: root.identity-changed-previous;
+        answer(ok) => { root.identity-changed-answer(ok); }
     }
 
     if root.recovery-key-visible: RecoveryKeyDialog {

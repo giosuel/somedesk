@@ -4,6 +4,7 @@
 //! * [`credentials`] — what a device persists after enrollment.
 //! * [`session`] — establishing the end-to-end encrypted channel to a peer device.
 //! * [`host`] / [`viewer`] — the two ends of a remote-control session.
+//! * [`trust`] — remembered peer identities and devices allowed to connect unattended.
 //! * [`clipboard`] / [`files`] — clipboard sharing and file transfer within a session.
 
 pub mod clipboard;
@@ -13,6 +14,7 @@ pub mod host;
 pub mod server;
 pub mod session;
 mod tls;
+pub mod trust;
 pub mod viewer;
 
 use somedesk_proto::control::ErrorInfo;

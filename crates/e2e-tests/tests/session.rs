@@ -3,12 +3,14 @@
 use somedesk_client::files::{AcceptPolicy, Direction, FileTransfers, TransferEvent};
 use somedesk_client::host::{self, HostSettings};
 use somedesk_client::session;
+use somedesk_client::trust::PeerStatus;
 use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
 use somedesk_client::SessionExtras;
 use somedesk_codec::RgbFrame;
 use somedesk_e2e_tests::{Device, FakeCapturer, FakeClipboard, RecordingInjector, TestServer};
 use somedesk_proto::control::Event;
 use somedesk_proto::session::{SessionMsg, POINTER_MAX};
+use sqlx::{Connection, PgConnection};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -629,5 +631,55 @@ async fn interrupted_transfers_leave_no_partial_files() {
     let left: Vec<_> = std::fs::read_dir(&host_dl).unwrap().map(|e| e.unwrap().file_name()).collect();
     assert!(left.is_empty(), "partial files left behind: {left:?}");
     std::fs::remove_dir_all(&tmp).unwrap();
+    ts.stop().await;
+}
+
+/// A server that swaps in a different key for a known user (here: the account is deleted and
+/// re-created behind everyone's back) is caught by the remembered identity.
+#[tokio::test]
+async fn swapped_identity_is_detected() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let store_path =
+        std::env::temp_dir().join(format!("somedesk-known-{}-{}.json", std::process::id(), rand::random::<u32>()));
+    let mut trust = somedesk_client::trust::TrustStore::load(&store_path).unwrap();
+
+    // First contact: bob is new, then remembered.
+    let host_id = host_dev.creds.device_id;
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let ((ch, _), _host_ch) = tokio::join!(
+        async { session::connect(&viewer_dev.conn, &viewer_dev.creds, host_id).await.unwrap() },
+        host_side
+    );
+    assert_eq!(trust.status(&ch.peer), PeerStatus::New);
+    trust.remember(&ch.peer);
+    drop(ch);
+
+    // The "server" replaces bob with an impostor of the same name.
+    let mut db = PgConnection::connect(&ts.db_url).await.unwrap();
+    sqlx::query("DELETE FROM users WHERE username = 'bob'").execute(&mut db).await.unwrap();
+    let mut impostor = ts.signup("bob", "attacker password", "desktop").await;
+    let impostor_id = impostor.creds.device_id;
+    let impostor_side = async {
+        let (sid, from) = next_incoming(&mut impostor).await;
+        session::accept(&impostor.conn, &impostor.creds, sid, &from).await.unwrap()
+    };
+    let ((ch, _), _imp_ch) = tokio::join!(
+        async { session::connect(&viewer_dev.conn, &viewer_dev.creds, impostor_id).await.unwrap() },
+        impostor_side
+    );
+    assert_eq!(ch.peer.username, "bob");
+    assert_eq!(
+        trust.status(&ch.peer),
+        PeerStatus::Changed { previous_identity_pk: host_dev.creds.identity_pk },
+        "a different key under a known name must be flagged"
+    );
+    let _ = std::fs::remove_file(store_path);
     ts.stop().await;
 }
