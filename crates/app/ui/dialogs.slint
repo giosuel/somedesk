@@ -1,6 +1,9 @@
 import { Theme, Icons } from "theme.slint";
 import { Icon, PrimaryButton, GhostButton, Card, Avatar, Spinner, Checkbox } from "widgets.slint";
 
+/// How the caller relates to what this computer remembers (see the trust store).
+export enum TrustLevel { new-peer, known, changed, own-account }
+
 component Backdrop inherits Rectangle {
     background: #05060acc;
     TouchArea { }
@@ -11,7 +14,9 @@ export component IncomingDialog inherits Backdrop {
     in property <string> user-letter;
     in property <string> device;
     in property <string> fingerprint;
-    in property <bool> same-account;
+    in property <string> previous-fingerprint;
+    in property <TrustLevel> trust;
+    in-out property <bool> always-allow;
     /// Extra guidance, e.g. about the desktop's own permission dialog on Wayland.
     in property <string> note;
     callback answer(bool);
@@ -39,29 +44,55 @@ export component IncomingDialog inherits Backdrop {
             }
             Rectangle {
                 border-radius: 10px;
-                background: Theme.input-bg;
+                background: root.trust == TrustLevel.changed ? Theme.danger-soft : Theme.input-bg;
                 border-width: 1px;
-                border-color: Theme.border;
+                border-color: root.trust == TrustLevel.changed ? #f0526a80 : Theme.border;
                 VerticalLayout {
                     padding: 12px;
                     spacing: 6px;
                     HorizontalLayout {
                         spacing: 8px;
-                        Icon { d: Icons.fingerprint; size: 14px; color: Theme.muted; stroke: 1.8px; }
+                        Icon {
+                            d: Icons.fingerprint;
+                            size: 14px;
+                            stroke: 1.8px;
+                            color: root.trust == TrustLevel.changed ? Theme.danger : Theme.muted;
+                        }
                         Text {
-                            text: root.same-account ? "Verified: one of your own devices" : "Their identity fingerprint";
-                            color: root.same-account ? Theme.success : Theme.muted;
+                            text: root.trust == TrustLevel.own-account ? "Verified: one of your own devices"
+                                : root.trust == TrustLevel.known ? "Known: you have connected with " + root.user + " before"
+                                : root.trust == TrustLevel.changed ? "Warning: " + root.user + "'s identity has changed"
+                                : "First connection: compare this fingerprint with " + root.user;
+                            color: root.trust == TrustLevel.changed ? Theme.danger
+                                : root.trust == TrustLevel.new-peer ? Theme.muted : Theme.success;
                             font-size: 12px;
                             font-weight: 600;
+                            wrap: word-wrap;
                         }
                     }
                     Text { text: root.fingerprint; color: #c9c3ff; font-size: 13px; font-family: Theme.mono; }
+                    if root.trust == TrustLevel.changed: Text {
+                        text: "Before: " + root.previous-fingerprint;
+                        color: Theme.muted;
+                        font-size: 12px;
+                        font-family: Theme.mono;
+                    }
                 }
             }
-            if !root.same-account: Text {
+            if root.trust == TrustLevel.changed: Text {
+                text: "This happens when they reset their account, but it is also what an impersonator would look like. Only accept after confirming the new fingerprint with them directly.";
+                color: Theme.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            if root.trust == TrustLevel.new-peer: Text {
                 text: "Only accept if you are expecting this connection.";
                 color: Theme.warning;
                 font-size: 12px;
+            }
+            if root.trust == TrustLevel.new-peer || root.trust == TrustLevel.known: Checkbox {
+                text: "Let this device connect without asking next time";
+                checked <=> root.always-allow;
             }
             if root.note != "": Rectangle {
                 border-radius: 10px;
@@ -382,6 +413,68 @@ export component FileOfferDialog inherits Backdrop {
                 alignment: end;
                 GhostButton { width: 110px; text: "Decline"; clicked => { root.answer(false); } }
                 PrimaryButton { width: 120px; text: "Save"; clicked => { root.answer(true); } }
+            }
+        }
+    }
+}
+
+/// The computer we are connecting to presents a different identity than last time.
+export component IdentityChangedDialog inherits Backdrop {
+    in property <string> user;
+    in property <string> fingerprint;
+    in property <string> previous-fingerprint;
+    callback answer(bool);
+    Card {
+        width: 460px;
+        height: body.preferred-height;
+        body := VerticalLayout {
+            padding: 28px;
+            spacing: 16px;
+            HorizontalLayout {
+                spacing: 14px;
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 14px;
+                    background: Theme.danger-soft;
+                    Icon { d: Icons.shield; size: 24px; color: Theme.danger; }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text { text: "Identity changed"; color: Theme.text; font-size: 18px; font-weight: 700; }
+                    Text { text: "The connection was stopped to protect you."; color: Theme.muted; font-size: 13px; }
+                }
+            }
+            Text {
+                text: root.user + " has a different identity than the last time you connected. That happens when they reset their account, but it is also what an attacker in the middle would look like.";
+                color: Theme.text;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                border-radius: 10px;
+                background: Theme.danger-soft;
+                border-width: 1px;
+                border-color: #f0526a80;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+                    Text { text: "Now:    " + root.fingerprint; color: #ffd3da; font-size: 13px; font-family: Theme.mono; }
+                    Text { text: "Before: " + root.previous-fingerprint; color: Theme.muted; font-size: 13px; font-family: Theme.mono; }
+                }
+            }
+            Text {
+                text: "Ask " + root.user + " for their fingerprint (shown on their home screen) through another channel. Only trust the new identity if it matches.";
+                color: Theme.muted;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: end;
+                PrimaryButton { width: 120px; text: "Cancel"; clicked => { root.answer(false); } }
+                GhostButton { text: "Trust new identity"; fg: Theme.danger; clicked => { root.answer(true); } }
             }
         }
     }

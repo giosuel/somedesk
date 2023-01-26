@@ -4,7 +4,7 @@
 //! back with `upgrade_in_event_loop`. Locks are never held across an `.await`.
 
 use crate::keymap::keysym_for;
-use crate::{AppWindow, DeviceItem, Page, TransferItem};
+use crate::{AppWindow, ContactItem, DeviceItem, Page, TransferItem, TrustLevel};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use somedesk_client::credentials::DeviceCredentials;
@@ -12,6 +12,7 @@ use somedesk_client::files::{AcceptPolicy, Direction, FileTransfers, TransferEve
 use somedesk_client::host::{self, HostSettings};
 use somedesk_client::server::ServerConn;
 use somedesk_client::session;
+use somedesk_client::trust::{PeerStatus, TrustStore};
 use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
 use somedesk_codec::RgbFrame;
 use somedesk_crypto::keys::fingerprint;
@@ -62,7 +63,12 @@ struct State {
     viewer_input: Option<mpsc::UnboundedSender<SessionMsg>>,
     scroll_acc: (f32, f32),
     host_stop: Option<watch::Sender<bool>>,
-    incoming_answer: Option<oneshot::Sender<bool>>,
+    /// (accepted, let this device connect without asking from now on)
+    incoming_answer: Option<oneshot::Sender<(bool, bool)>>,
+    /// Remembered peer identities; loaded at start.
+    trust: Option<TrustStore>,
+    /// A host whose identity changed: (its certificate, its device id), until the user decides.
+    identity_changed: Option<(DeviceCert, u64)>,
     toast_generation: u64,
     /// Keeps copied text available on X11, where the copying app must serve the clipboard.
     copy_clipboard: Option<Box<dyn somedesk_platform::Clipboard>>,
@@ -97,6 +103,17 @@ fn format_size(bytes: u64) -> String {
         format!("{bytes} B")
     } else {
         format!("{v:.1} {}", UNITS[unit])
+    }
+}
+
+/// "3 minutes ago" etc.
+fn ago(secs: i64) -> String {
+    let plural = |n: i64, unit: &str| format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" });
+    match secs.max(0) {
+        0..60 => "just now".into(),
+        s @ 60..3600 => plural(s / 60, "minute"),
+        s @ 3600..86400 => plural(s / 3600, "hour"),
+        s => plural(s / 86400, "day"),
     }
 }
 
@@ -179,6 +196,58 @@ impl Controller {
         self.0.dir.join("device.json")
     }
 
+    fn trust_path(&self) -> PathBuf {
+        self.0.dir.join("known_peers.json")
+    }
+
+    /// Changes the trust store, saves it and refreshes the contacts list.
+    fn with_trust(&self, f: impl FnOnce(&mut TrustStore)) {
+        {
+            let mut st = self.0.state.lock().unwrap();
+            let Some(t) = st.trust.as_mut() else { return };
+            f(t);
+            if let Err(e) = t.save() {
+                tracing::error!("cannot save known peers: {e}");
+            }
+        }
+        self.publish_contacts();
+    }
+
+    fn trust_status(&self, cert: &DeviceCert) -> PeerStatus {
+        self.0.state.lock().unwrap().trust.as_ref().map_or(PeerStatus::New, |t| t.status(cert))
+    }
+
+    fn publish_contacts(&self) {
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let items: Vec<ContactItem> = self
+            .0
+            .state
+            .lock()
+            .unwrap()
+            .trust
+            .as_ref()
+            .map(|t| {
+                t.peers()
+                    .map(|p| ContactItem {
+                        username: p.username.clone().into(),
+                        letter: letter(&p.username).into(),
+                        fingerprint: fingerprint(&p.identity_pk).into(),
+                        detail: format!("Last connected {}", ago(now - p.last_seen)).into(),
+                        unattended: p
+                            .unattended
+                            .iter()
+                            .map(|d| d.device_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                            .into(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.ui(move |ui| ui.set_contacts(ModelRc::new(VecModel::from(items))));
+    }
+
     fn settings_path(&self) -> PathBuf {
         self.0.dir.join("settings.json")
     }
@@ -227,7 +296,20 @@ impl Controller {
             .unwrap_or_else(|| "localhost".into());
         let auto_accept = settings.auto_accept_own_devices;
         let share_clipboard = settings.share_clipboard;
-        self.0.state.lock().unwrap().settings = settings;
+        let trust_path = self.trust_path();
+        let trust = TrustStore::load(&trust_path).unwrap_or_else(|e| {
+            // Keep the unreadable file for inspection rather than overwriting it.
+            let aside = trust_path.with_extension("json.broken");
+            tracing::error!("cannot read known peers ({e}); moving it to {}", aside.display());
+            let _ = std::fs::rename(&trust_path, aside);
+            TrustStore::empty(&trust_path)
+        });
+        {
+            let mut st = self.0.state.lock().unwrap();
+            st.settings = settings;
+            st.trust = Some(trust);
+        }
+        self.publish_contacts();
         self.ui(move |ui| {
             ui.set_login_server(server.into());
             ui.set_login_device_name(hostname().into());
@@ -299,10 +381,28 @@ impl Controller {
         });
         let c = self.clone();
         ui.on_incoming_answer(move |ok| {
+            let always = c.0.ui.upgrade().is_some_and(|ui| ui.get_incoming_always_allow());
             if let Some(tx) = c.0.state.lock().unwrap().incoming_answer.take() {
-                let _ = tx.send(ok);
+                let _ = tx.send((ok, always));
             }
         });
+        let c = self.clone();
+        ui.on_identity_changed_answer(move |trust| c.identity_changed_answer(trust));
+        let c = self.clone();
+        ui.on_revoke_contact(move |user| {
+            c.with_trust(|t| {
+                let devices: Vec<_> = t
+                    .peers()
+                    .filter(|p| p.username == user.as_str())
+                    .flat_map(|p| p.unattended.iter().map(|d| d.device_pk))
+                    .collect();
+                for d in devices {
+                    t.revoke_unattended(&user, &d);
+                }
+            });
+        });
+        let c = self.clone();
+        ui.on_forget_contact(move |user| c.with_trust(|t| t.forget(&user)));
         let c = self.clone();
         ui.on_stop_hosting(move || {
             if let Some(stop) = c.0.state.lock().unwrap().host_stop.take() {
@@ -628,8 +728,42 @@ impl Controller {
             return;
         }
         let same_account = peer.identity_pk == creds.identity_pk;
-        let auto = same_account && self.0.state.lock().unwrap().settings.auto_accept_own_devices;
-        let accepted = auto || self.prompt(&peer, same_account).await;
+        let status = self.trust_status(&peer);
+        let auto = if same_account {
+            self.0.state.lock().unwrap().settings.auto_accept_own_devices
+        } else {
+            self.0.state.lock().unwrap().trust.as_ref().is_some_and(|t| t.is_unattended(&peer))
+        };
+        let mut ch = ch;
+        let (accepted, always_allow) = if auto {
+            tracing::info!(peer = %peer.username, device = %peer.device_name, "accepted without asking");
+            (true, false)
+        } else {
+            let level = match (&status, same_account) {
+                (_, true) => TrustLevel::OwnAccount,
+                (PeerStatus::New, _) => TrustLevel::NewPeer,
+                (PeerStatus::Known, _) => TrustLevel::Known,
+                (PeerStatus::Changed { .. }, _) => TrustLevel::Changed,
+            };
+            let previous = match &status {
+                PeerStatus::Changed { previous_identity_pk } => fingerprint(previous_identity_pk),
+                _ => String::new(),
+            };
+            // If the caller gives up while we are asking, take the question down.
+            tokio::select! {
+                answer = self.prompt(&peer, level, previous) => answer,
+                _ = ch.receiver.recv::<SessionMsg>() => {
+                    self.0.state.lock().unwrap().incoming_answer = None;
+                    self.ui(|ui| ui.set_incoming_visible(false));
+                    self.toast(format!("{} cancelled the connection", device_label(&peer)), false);
+                    self.0.busy.store(false, Ordering::SeqCst);
+                    return;
+                }
+            }
+        };
+        if accepted && !same_account {
+            self.with_trust(|t| if always_allow { t.allow_unattended(&peer) } else { t.remember(&peer) });
+        }
         if !accepted {
             host::reject(ch, "The connection was declined.").await;
             self.0.busy.store(false, Ordering::SeqCst);
@@ -680,7 +814,7 @@ impl Controller {
     }
 
     /// Shows the accept/decline prompt and waits for an answer.
-    async fn prompt(&self, peer: &DeviceCert, same_account: bool) -> bool {
+    async fn prompt(&self, peer: &DeviceCert, trust: TrustLevel, previous_fingerprint: String) -> (bool, bool) {
         let (tx, rx) = oneshot::channel();
         self.0.state.lock().unwrap().incoming_answer = Some(tx);
         let (user, device, fp) = (peer.username.clone(), peer.device_name.clone(), fingerprint(&peer.identity_pk));
@@ -696,11 +830,16 @@ impl Controller {
             ui.set_incoming_user(user.into());
             ui.set_incoming_device(device.into());
             ui.set_incoming_fingerprint(fp.into());
-            ui.set_incoming_same_account(same_account);
+            ui.set_incoming_trust(trust);
+            ui.set_incoming_previous_fingerprint(previous_fingerprint.into());
+            ui.set_incoming_always_allow(false);
             ui.set_incoming_visible(true);
             bring_to_front(ui);
         });
-        let answer = matches!(tokio::time::timeout(PROMPT_TIMEOUT, rx).await, Ok(Ok(true)));
+        let answer = match tokio::time::timeout(PROMPT_TIMEOUT, rx).await {
+            Ok(Ok(a)) => a,
+            _ => (false, false),
+        };
         self.0.state.lock().unwrap().incoming_answer = None;
         self.ui(|ui| ui.set_incoming_visible(false));
         answer
@@ -748,8 +887,9 @@ impl Controller {
                 ui.set_page(Page::Home);
             });
             match result {
-                Ok(SessionEnd::Closed) => this.toast("Session ended", false),
-                Ok(SessionEnd::Rejected(reason)) => this.toast(reason, true),
+                Ok(Some(SessionEnd::Closed)) => this.toast("Session ended", false),
+                Ok(Some(SessionEnd::Rejected(reason))) => this.toast(reason, true),
+                Ok(None) => {}
                 Err(e) => this.toast(e.to_string(), true),
             }
         });
@@ -761,9 +901,26 @@ impl Controller {
         conn: Arc<ServerConn>,
         creds: DeviceCredentials,
         device_id: u64,
-    ) -> somedesk_client::Result<SessionEnd> {
+    ) -> somedesk_client::Result<Option<SessionEnd>> {
         let (ch, host_info) = session::connect(&conn, &creds, device_id).await?;
         let peer = ch.peer.clone();
+        let same_account = peer.identity_pk == creds.identity_pk;
+        if let (PeerStatus::Changed { previous_identity_pk }, false) = (self.trust_status(&peer), same_account) {
+            // Stop before the host sees anything from us; let the user decide.
+            drop(ch);
+            let (user, now, before) =
+                (peer.username.clone(), fingerprint(&peer.identity_pk), fingerprint(&previous_identity_pk));
+            self.0.state.lock().unwrap().identity_changed = Some((peer, device_id));
+            self.ui(move |ui| {
+                ui.set_outgoing_visible(false);
+                ui.set_identity_changed_user(user.into());
+                ui.set_identity_changed_fingerprint(now.into());
+                ui.set_identity_changed_previous(before.into());
+                ui.set_identity_changed_visible(true);
+            });
+            return Ok(None);
+        }
+        let peer_fp = fingerprint(&peer.identity_pk);
         let name = host_info.name.clone();
         self.ui(move |ui| ui.set_outgoing_target(name.into()));
 
@@ -774,12 +931,17 @@ impl Controller {
         let peer_label = device_label(&peer);
         let peer_id = format_device_id(device_id);
         let fps = Arc::new(Mutex::new((Instant::now(), 0u32)));
+        let remembered = peer.clone();
         let sink: viewer::EventSink = Arc::new(move |ev| match ev {
             ViewerEvent::Accepted => {
-                let (label, id) = (peer_label.clone(), peer_id.clone());
+                if !same_account {
+                    this.with_trust(|t| t.remember(&remembered));
+                }
+                let (label, id, fp) = (peer_label.clone(), peer_id.clone(), peer_fp.clone());
                 this.ui(move |ui| {
                     ui.set_session_peer(label.into());
                     ui.set_session_peer_id(id.into());
+                    ui.set_session_peer_fingerprint(fp.into());
                     ui.set_has_frame(false);
                     ui.set_session_view_only(false);
                     ui.set_latency("–".into());
@@ -817,7 +979,16 @@ impl Controller {
         let extras = somedesk_client::SessionExtras { clipboard: self.clipboard(), files: Some(files) };
         let result = viewer::run(ch, sink, input_rx, extras).await;
         self.end_transfers();
-        result
+        result.map(Some)
+    }
+
+    fn identity_changed_answer(&self, trust: bool) {
+        let pending = self.0.state.lock().unwrap().identity_changed.take();
+        self.ui(|ui| ui.set_identity_changed_visible(false));
+        if let (true, Some((cert, device_id))) = (trust, pending) {
+            self.with_trust(|t| t.remember(&cert));
+            self.connect(device_id.to_string());
+        }
     }
 
     // ------------------------------------------------------------------ files

@@ -9,6 +9,85 @@ export struct DeviceItem {
     is-self: bool,
 }
 
+export struct ContactItem {
+    username: string,
+    letter: string,
+    fingerprint: string,
+    detail: string,
+    /// Names of their devices allowed to connect without asking, or "".
+    unattended: string,
+}
+
+component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked;
+    width: label.preferred-width + 4px;
+    label := Text {
+        text: root.text;
+        color: root.active ? Theme.text : tab-ta.has-hover ? Theme.muted : Theme.subtle;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1.2px;
+    }
+    Rectangle {
+        y: parent.height + 6px;
+        height: 2px;
+        border-radius: 1px;
+        background: root.active ? Theme.accent : transparent;
+    }
+    tab-ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+component ContactRow inherits Rectangle {
+    in property <ContactItem> contact;
+    callback revoke(string);
+    callback forget(string);
+    height: content.preferred-height + 20px;
+    border-radius: 12px;
+    background: ta.has-hover ? Theme.card-hover : transparent;
+    ta := TouchArea { }
+    content := HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        y: 10px;
+        height: self.preferred-height;
+        spacing: 14px;
+        Avatar { y: (parent.height - self.height) / 2; letter: root.contact.letter; size: 38px; }
+        VerticalLayout {
+            alignment: center;
+            spacing: 3px;
+            Text { text: root.contact.username; color: Theme.text; font-size: 14px; font-weight: 600; }
+            Text { text: root.contact.fingerprint; color: #c9c3ff; font-size: 12px; font-family: Theme.mono; }
+            Text { text: root.contact.detail; color: Theme.subtle; font-size: 11px; }
+            if root.contact.unattended != "": HorizontalLayout {
+                spacing: 6px;
+                Icon { y: (parent.height - self.height) / 2; d: Icons.key; size: 12px; color: Theme.warning; stroke: 2px; }
+                Text {
+                    text: "Can connect without asking: " + root.contact.unattended;
+                    color: Theme.warning;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        if root.contact.unattended != "": GhostButton {
+            y: (parent.height - self.height) / 2;
+            button-height: 32px;
+            text: "Revoke";
+            clicked => { root.revoke(root.contact.username); }
+        }
+        GhostButton {
+            y: (parent.height - self.height) / 2;
+            button-height: 32px;
+            text: "Forget";
+            fg: Theme.muted;
+            clicked => { root.forget(root.contact.username); }
+        }
+    }
+}
+
 component SectionTitle inherits Text {
     color: Theme.muted;
     font-size: 11px;
@@ -81,6 +160,10 @@ export component HomePage inherits Rectangle {
     in property <bool> online;
     in property <string> status-text;
     in property <[DeviceItem]> devices;
+    in property <[ContactItem]> contacts;
+    callback revoke-contact(string);
+    callback forget-contact(string);
+    property <bool> show-contacts;
     in property <bool> connect-busy;
     in-out property <string> connect-id;
     in-out property <bool> auto-accept;
@@ -332,15 +415,28 @@ export component HomePage inherits Rectangle {
                         padding-bottom: 12px;
                         spacing: 10px;
                         HorizontalLayout {
-                            SectionTitle { text: "YOUR DEVICES"; vertical-alignment: center; }
+                            spacing: 22px;
+                            TabButton {
+                                text: "YOUR DEVICES";
+                                active: !root.show-contacts;
+                                clicked => { root.show-contacts = false; }
+                            }
+                            TabButton {
+                                text: "CONTACTS";
+                                active: root.show-contacts;
+                                clicked => { root.show-contacts = true; }
+                            }
                             Rectangle { horizontal-stretch: 1; }
                             Text {
-                                text: root.devices.length == 1 ? "1 device" : root.devices.length + " devices";
+                                text: root.show-contacts
+                                    ? (root.contacts.length == 1 ? "1 contact" : root.contacts.length + " contacts")
+                                    : (root.devices.length == 1 ? "1 device" : root.devices.length + " devices");
                                 color: Theme.subtle;
                                 font-size: 12px;
                             }
                         }
-                        Flickable {
+                        Rectangle { height: 4px; }
+                        if !root.show-contacts: Flickable {
                             vertical-stretch: 1;
                             VerticalLayout {
                                 alignment: start;
@@ -348,6 +444,29 @@ export component HomePage inherits Rectangle {
                                 for d in root.devices: DeviceRow {
                                     device: d;
                                     connect(id) => { root.connect(id); }
+                                }
+                            }
+                        }
+                        if root.show-contacts && root.contacts.length == 0: VerticalLayout {
+                            vertical-stretch: 1;
+                            alignment: center;
+                            Text {
+                                text: "People you connect with appear here. SomeDesk remembers their identity and warns you if it ever changes.";
+                                color: Theme.subtle;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                                horizontal-alignment: center;
+                            }
+                        }
+                        if root.show-contacts && root.contacts.length > 0: Flickable {
+                            vertical-stretch: 1;
+                            VerticalLayout {
+                                alignment: start;
+                                spacing: 2px;
+                                for c in root.contacts: ContactRow {
+                                    contact: c;
+                                    revoke(u) => { root.revoke-contact(u); }
+                                    forget(u) => { root.forget-contact(u); }
                                 }
                             }
                         }
