@@ -7,7 +7,7 @@ use somedesk_client::trust::PeerStatus;
 use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
 use somedesk_client::SessionExtras;
 use somedesk_codec::RgbFrame;
-use somedesk_e2e_tests::{Device, FakeCapturer, FakeClipboard, RecordingInjector, TestServer};
+use somedesk_e2e_tests::{Device, FakeCapturer, FakeClipboard, RecordingInjector, TestServer, TwoMonitorCapturer};
 use somedesk_proto::control::Event;
 use somedesk_proto::session::{SessionMsg, POINTER_MAX};
 use sqlx::{Connection, PgConnection};
@@ -681,5 +681,84 @@ async fn swapped_identity_is_detected() {
         "a different key under a known name must be flagged"
     );
     let _ = std::fs::remove_file(store_path);
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn viewer_can_pick_a_monitor() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let viewer_dev = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
+    let host_id = host_dev.creds.device_id;
+    let (mtx, mut monitors) = mpsc::unbounded_channel();
+    let (ftx, mut frames) = mpsc::unbounded_channel::<RgbFrame>();
+    let (atx, mut accepted) = mpsc::unbounded_channel();
+    let host_side = async {
+        let (sid, from) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+    };
+    let viewer_side = async {
+        let (ch, _) = session::connect(&viewer_dev.conn, &viewer_dev.creds, host_id).await.unwrap();
+        ch
+    };
+    let (vch, hch) = tokio::join!(viewer_side, host_side);
+    let sink: viewer::EventSink = Arc::new(move |ev| match ev {
+        ViewerEvent::Frame(f) => drop(ftx.send(f)),
+        ViewerEvent::Accepted => drop(atx.send(())),
+        ViewerEvent::Monitors { list, selected } => drop(mtx.send((list, selected))),
+        _ => {}
+    });
+    let (input, input_rx) = mpsc::unbounded_channel();
+    let viewer_task = tokio::spawn(viewer::run(vch, sink, input_rx, SessionExtras::default()));
+    let injector = RecordingInjector { size: (600, 300), ..Default::default() };
+    let log = injector.log.clone();
+    let (_stop_tx, stop_rx) = watch::channel(false);
+    let host_task = tokio::spawn(host::serve(
+        hch,
+        Box::new(TwoMonitorCapturer::default()),
+        Box::new(injector),
+        SessionExtras::default(),
+        HostSettings::default(),
+        stop_rx,
+    ));
+    tokio::time::timeout(T, accepted.recv()).await.unwrap().unwrap();
+
+    // The viewer learns about both monitors; everything is shown at first.
+    let (list, selected) = tokio::time::timeout(T, monitors.recv()).await.unwrap().unwrap();
+    assert_eq!(list.iter().map(|m| (m.name.as_str(), m.width)).collect::<Vec<_>>(), [("LEFT", 400), ("RIGHT", 200)]);
+    assert_eq!(selected, None);
+    let f = frame_matching(&mut frames, [128, 128, 128]).await;
+    assert_eq!((f.width, f.height), (600, 300));
+
+    // Pick the right-hand monitor: the picture switches, and pointer positions land on it.
+    input.send(SessionMsg::SelectMonitor { id: Some(TwoMonitorCapturer::RIGHT) }).unwrap();
+    let (_, selected) = tokio::time::timeout(T, monitors.recv()).await.unwrap().unwrap();
+    assert_eq!(selected, Some(TwoMonitorCapturer::RIGHT));
+    let f = frame_matching(&mut frames, [224, 64, 32]).await;
+    assert_eq!((f.width, f.height), (200, 300));
+    input.send(SessionMsg::PointerMove { x: 0, y: 0 }).unwrap();
+    input.send(SessionMsg::PointerMove { x: POINTER_MAX, y: POINTER_MAX }).unwrap();
+
+    // And back to everything.
+    input.send(SessionMsg::SelectMonitor { id: None }).unwrap();
+    let (_, selected) = tokio::time::timeout(T, monitors.recv()).await.unwrap().unwrap();
+    assert_eq!(selected, None);
+    frame_matching(&mut frames, [128, 128, 128]).await;
+    input.send(SessionMsg::PointerMove { x: POINTER_MAX, y: POINTER_MAX }).unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    drop(input);
+    tokio::time::timeout(T, viewer_task).await.unwrap().unwrap().unwrap();
+    tokio::time::timeout(T, host_task).await.unwrap().unwrap().unwrap();
+    assert_eq!(
+        log.lock().unwrap().clone(),
+        vec![
+            SessionMsg::PointerMove { x: 400, y: 0 },
+            SessionMsg::PointerMove { x: 599, y: 299 },
+            SessionMsg::PointerMove { x: 599, y: 299 },
+        ]
+    );
     ts.stop().await;
 }

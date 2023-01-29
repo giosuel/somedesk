@@ -112,7 +112,7 @@ export component GhostButton inherits Rectangle {
             size: 16px;
             color: root.fg;
         }
-        Text {
+        if root.text != "": Text {
             text: root.text;
             color: root.fg;
             font-size: 13px;

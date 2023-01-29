@@ -19,6 +19,11 @@ pub enum ViewerEvent {
     Frame(RgbFrame),
     /// The host only allows viewing; input is ignored.
     ViewOnly,
+    /// The host has several monitors; `selected` is the one shown (`None`: all).
+    Monitors {
+        list: Vec<somedesk_proto::session::MonitorInfo>,
+        selected: Option<u32>,
+    },
     /// Round-trip time measured with pings.
     Latency(Duration),
 }
@@ -97,6 +102,7 @@ pub async fn run(
                 }
                 Some(SessionMsg::ScreenInfo { width, height }) => events(ViewerEvent::ScreenInfo { width, height }),
                 Some(SessionMsg::ViewOnly) => events(ViewerEvent::ViewOnly),
+                Some(SessionMsg::Monitors { list, selected }) => events(ViewerEvent::Monitors { list, selected }),
                 Some(SessionMsg::Pong { t }) => {
                     let rtt = start.elapsed().saturating_sub(Duration::from_micros(t));
                     events(ViewerEvent::Latency(rtt));

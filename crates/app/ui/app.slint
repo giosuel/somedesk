@@ -1,11 +1,11 @@
 import { Theme } from "theme.slint";
 import { LoginPage } from "login.slint";
 import { HomePage, DeviceItem, ContactItem } from "home.slint";
-import { SessionPage } from "session.slint";
+import { SessionPage, MonitorChoice } from "session.slint";
 import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
 
-export { DeviceItem, TransferItem, ContactItem, TrustLevel }
+export { DeviceItem, TransferItem, ContactItem, TrustLevel, MonitorChoice }
 
 export enum Page { starting, login, home, session }
 
@@ -87,6 +87,9 @@ export component AppWindow inherits Window {
     in property <string> fps;
     in property <string> resolution;
     in property <bool> session-view-only;
+    in property <[MonitorChoice]> session-monitors;
+    in property <int> session-monitor-selected: -1;
+    callback select-monitor(int);
     callback disconnect();
     callback pointer-moved(length, length, length, length);
     callback pointer-button(int, bool);
@@ -183,6 +186,9 @@ export component AppWindow inherits Window {
         fps: root.fps;
         resolution: root.resolution;
         view-only: root.session-view-only;
+        monitors: root.session-monitors;
+        monitor-selected: root.session-monitor-selected;
+        select-monitor(id) => { root.select-monitor(id); }
         disconnect => { root.disconnect(); }
         send-files => { root.send-files(); }
         pointer-moved(x, y, w, h) => { root.pointer-moved(x, y, w, h); }
@@ -196,17 +202,6 @@ export component AppWindow inherits Window {
         cancel => { root.outgoing-cancel(); }
     }
 
-    if root.incoming-visible: IncomingDialog {
-        user: root.incoming-user;
-        user-letter: root.incoming-user-letter;
-        device: root.incoming-device;
-        fingerprint: root.incoming-fingerprint;
-        trust: root.incoming-trust;
-        previous-fingerprint: root.incoming-previous-fingerprint;
-        always-allow <=> root.incoming-always-allow;
-        note: root.incoming-note;
-        answer(ok) => { root.incoming-answer(ok); }
-    }
 
     if root.transfers.length > 0 && (root.page == Page.session || root.page == Page.home): TransfersPanel {
         x: parent.width - self.width - 20px;
@@ -236,6 +231,19 @@ export component AppWindow inherits Window {
         copied: root.recovery-key-copied;
         copy => { root.recovery-key-copy(); }
         done => { root.recovery-key-done(); }
+    }
+
+    // Above everything else: someone is waiting for an answer.
+    if root.incoming-visible: IncomingDialog {
+        user: root.incoming-user;
+        user-letter: root.incoming-user-letter;
+        device: root.incoming-device;
+        fingerprint: root.incoming-fingerprint;
+        trust: root.incoming-trust;
+        previous-fingerprint: root.incoming-previous-fingerprint;
+        always-allow <=> root.incoming-always-allow;
+        note: root.incoming-note;
+        answer(ok) => { root.incoming-answer(ok); }
     }
 
     if root.toast-text != "": Toast {

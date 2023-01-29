@@ -5,10 +5,11 @@ use crate::session::Channel;
 use crate::{ClientError, Result, SessionExtras};
 use somedesk_codec::{EncoderSettings, H264Encoder};
 use somedesk_platform::{Capturer, Injector};
-use somedesk_proto::session::{SessionMsg, POINTER_MAX};
+use somedesk_proto::session::{MonitorInfo, SessionMsg, POINTER_MAX};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 
@@ -64,23 +65,27 @@ pub async fn serve(
     }
     let view_only = settings.view_only;
 
-    let running = Arc::new(AtomicBool::new(true));
-    let keyframe = Arc::new(AtomicBool::new(true));
+    let shared = Arc::new(CaptureShared::default());
+    shared.running.store(true, Ordering::Relaxed);
+    shared.keyframe.store(true, Ordering::Relaxed);
     let (video_tx, mut video_rx) = mpsc::channel::<SessionMsg>(2);
     let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<SessionMsg>();
     let (input_tx, input_rx) = std::sync::mpsc::channel::<SessionMsg>();
 
     let capture = {
-        let (running, keyframe, settings) = (running.clone(), keyframe.clone(), settings.clone());
+        let (shared, settings) = (shared.clone(), settings.clone());
         std::thread::Builder::new()
             .name("somedesk-capture".into())
-            .spawn(move || capture_loop(capturer, settings, video_tx, running, keyframe))
+            .spawn(move || capture_loop(capturer, settings, video_tx, shared))
             .expect("spawn capture thread")
     };
-    let inject = std::thread::Builder::new()
-        .name("somedesk-inject".into())
-        .spawn(move || inject_loop(injector, input_rx))
-        .expect("spawn inject thread");
+    let inject = {
+        let shared = shared.clone();
+        std::thread::Builder::new()
+            .name("somedesk-inject".into())
+            .spawn(move || inject_loop(injector, input_rx, shared))
+            .expect("spawn inject thread")
+    };
     // The host's existing clipboard is only shared once the user there copies something new.
     let SessionExtras { clipboard, files } = extras;
     let clipboard = clipboard.map(|c| ClipboardSync::start(c, ctrl_tx.clone(), false));
@@ -109,7 +114,8 @@ pub async fn serve(
         loop {
             match receiver.recv::<SessionMsg>().await? {
                 None | Some(SessionMsg::Bye) => return Ok::<_, ClientError>(()),
-                Some(SessionMsg::RequestKeyframe) => keyframe.store(true, Ordering::Relaxed),
+                Some(SessionMsg::RequestKeyframe) => shared.keyframe.store(true, Ordering::Relaxed),
+                Some(SessionMsg::SelectMonitor { id }) => *shared.monitor_request.lock().unwrap() = Some(id),
                 Some(SessionMsg::Ping { t }) => {
                     let _ = ctrl_tx.send(SessionMsg::Pong { t });
                 }
@@ -152,7 +158,7 @@ pub async fn serve(
         Err(e) if e.is_peer_gone() => Ok(()),
         r => r,
     };
-    running.store(false, Ordering::Relaxed);
+    shared.running.store(false, Ordering::Relaxed);
     let _ = sender.send(&SessionMsg::Bye).await;
     let _ = sender.into_inner().finish();
     if let Some(f) = &files {
@@ -176,13 +182,51 @@ pub async fn serve(
     result.map(|_| stats)
 }
 
+/// State shared between the session task and the capture and inject threads.
+#[derive(Default)]
+struct CaptureShared {
+    running: AtomicBool,
+    /// The viewer needs an IDR frame.
+    keyframe: AtomicBool,
+    /// Area of the screen currently shown, in injector coordinates (x, y, width, height); `None`
+    /// when the whole screen is shown.
+    view: Mutex<Option<(i32, i32, u32, u32)>>,
+    /// Monitor selection requested by the viewer, applied by the capture thread.
+    monitor_request: Mutex<Option<Option<u32>>>,
+}
+
+/// How often the list of monitors is checked for changes.
+const MONITOR_POLL: Duration = Duration::from_secs(3);
+
+fn monitors_msg(list: &[somedesk_platform::Monitor], selected: Option<u32>) -> SessionMsg {
+    SessionMsg::Monitors {
+        list: list
+            .iter()
+            .map(|m| MonitorInfo {
+                id: m.id,
+                name: m.name.clone(),
+                width: m.width,
+                height: m.height,
+                primary: m.primary,
+            })
+            .collect(),
+        selected,
+    }
+}
+
 fn capture_loop(
     mut capturer: Box<dyn Capturer>,
     settings: HostSettings,
     tx: mpsc::Sender<SessionMsg>,
-    running: Arc<AtomicBool>,
-    keyframe: Arc<AtomicBool>,
+    shared: Arc<CaptureShared>,
 ) {
+    let (running, keyframe) = (&shared.running, &shared.keyframe);
+    let mut monitors = capturer.monitors().unwrap_or_default();
+    let mut selected: Option<u32> = None;
+    let mut monitors_checked = Instant::now();
+    if monitors.len() > 1 && tx.blocking_send(monitors_msg(&monitors, selected)).is_err() {
+        return;
+    }
     let interval = Duration::from_secs_f64(1.0 / settings.max_fps.max(1) as f64);
     let enc_settings = EncoderSettings { bitrate_bps: settings.bitrate_bps, max_fps: settings.max_fps as f32 };
     let mut encoder: Option<H264Encoder> = None;
@@ -192,6 +236,37 @@ fn capture_loop(
 
     while running.load(Ordering::Relaxed) {
         let started = Instant::now();
+        let request = shared.monitor_request.lock().unwrap().take();
+        let mut announce = false;
+        if let Some(id) = request {
+            match capturer.select_monitor(id) {
+                Ok(()) => {
+                    selected = id;
+                    announce = true;
+                    keyframe.store(true, Ordering::Relaxed);
+                }
+                Err(e) => tracing::warn!("cannot select monitor: {e:#}"),
+            }
+        }
+        if monitors_checked.elapsed() >= MONITOR_POLL {
+            monitors_checked = Instant::now();
+            let now = capturer.monitors().unwrap_or_default();
+            if now != monitors {
+                monitors = now;
+                // A selected monitor that went away falls back to the whole screen.
+                if selected.is_some_and(|id| !monitors.iter().any(|m| m.id == id)) {
+                    selected = None;
+                    let _ = capturer.select_monitor(None);
+                }
+                announce = true;
+            }
+        }
+        if announce
+            && (monitors.len() > 1 || request.is_some())
+            && tx.blocking_send(monitors_msg(&monitors, selected)).is_err()
+        {
+            return;
+        }
         let frame = match capturer.capture() {
             Ok(f) => f,
             Err(e) => {
@@ -200,6 +275,7 @@ fn capture_loop(
                 continue;
             }
         };
+        *shared.view.lock().unwrap() = frame.origin.map(|(x, y)| (x, y, frame.width, frame.height));
         let needs_new_encoder = encoder.as_ref().is_none_or(|e| {
             let (w, h) = e.dimensions();
             (w, h) != (frame.width & !1, frame.height & !1)
@@ -247,7 +323,7 @@ fn capture_loop(
     }
 }
 
-fn inject_loop(mut injector: Box<dyn Injector>, rx: std::sync::mpsc::Receiver<SessionMsg>) {
+fn inject_loop(mut injector: Box<dyn Injector>, rx: std::sync::mpsc::Receiver<SessionMsg>, shared: Arc<CaptureShared>) {
     let mut size = injector.screen_size().unwrap_or((1, 1));
     let mut size_checked = Instant::now();
     let mut keys_down: HashSet<u32> = HashSet::new();
@@ -261,7 +337,13 @@ fn inject_loop(mut injector: Box<dyn Injector>, rx: std::sync::mpsc::Receiver<Se
         let res = match msg {
             SessionMsg::PointerMove { x, y } => {
                 let scale = |v: u16, max: u32| (v as u64 * max.saturating_sub(1) as u64 / POINTER_MAX as u64) as u32;
-                injector.pointer_move(scale(x, size.0), scale(y, size.1))
+                // Coordinates are relative to what the viewer sees: one monitor, or the screen.
+                let view = *shared.view.lock().unwrap();
+                match view {
+                    Some((ox, oy, w, h)) => injector
+                        .pointer_move((ox + scale(x, w) as i32).max(0) as u32, (oy + scale(y, h) as i32).max(0) as u32),
+                    None => injector.pointer_move(scale(x, size.0), scale(y, size.1)),
+                }
             }
             SessionMsg::PointerButton { button, down } => {
                 if down {
