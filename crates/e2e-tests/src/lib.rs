@@ -121,7 +121,7 @@ impl Capturer for FakeCapturer {
     fn capture(&mut self) -> anyhow::Result<Frame> {
         let px = *self.bgra.lock().unwrap();
         let data = px.repeat((self.width * self.height) as usize);
-        Ok(Frame { width: self.width, height: self.height, stride: self.width as usize * 4, data })
+        Ok(Frame { width: self.width, height: self.height, stride: self.width as usize * 4, data, origin: None })
     }
 }
 
@@ -209,6 +209,47 @@ impl Clipboard for FakeClipboard {
         let mut s = self.state.lock().unwrap();
         s.text = Some(text.to_owned());
         s.written.push(text.to_owned());
+        Ok(())
+    }
+}
+
+/// A fake screen of two side-by-side monitors: "LEFT" (id 1, 400x300 at 0,0, blue) and "RIGHT"
+/// (id 2, 200x300 at 400,0, red).
+#[derive(Default)]
+pub struct TwoMonitorCapturer {
+    pub selected: Option<u32>,
+}
+
+impl TwoMonitorCapturer {
+    pub const LEFT: u32 = 1;
+    pub const RIGHT: u32 = 2;
+}
+
+impl Capturer for TwoMonitorCapturer {
+    fn capture(&mut self) -> anyhow::Result<Frame> {
+        let (w, h, px, origin): (u32, u32, [u8; 4], _) = match self.selected {
+            None => (600, 300, [0x80, 0x80, 0x80, 0xFF], None),
+            Some(Self::LEFT) => (400, 300, [0xE0, 0x40, 0x20, 0xFF], Some((0, 0))),
+            Some(_) => (200, 300, [0x20, 0x40, 0xE0, 0xFF], Some((400, 0))),
+        };
+        Ok(Frame { width: w, height: h, stride: w as usize * 4, data: px.repeat((w * h) as usize), origin })
+    }
+
+    fn monitors(&mut self) -> anyhow::Result<Vec<somedesk_platform::Monitor>> {
+        let m = |id, name: &str, x, width| somedesk_platform::Monitor {
+            id,
+            name: name.into(),
+            x,
+            y: 0,
+            width,
+            height: 300,
+            primary: id == Self::LEFT,
+        };
+        Ok(vec![m(Self::LEFT, "LEFT", 0, 400), m(Self::RIGHT, "RIGHT", 400, 200)])
+    }
+
+    fn select_monitor(&mut self, id: Option<u32>) -> anyhow::Result<()> {
+        self.selected = id;
         Ok(())
     }
 }

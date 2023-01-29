@@ -14,11 +14,40 @@ pub struct Frame {
     /// Bytes per row.
     pub stride: usize,
     pub data: Vec<u8>,
+    /// Where the frame's top-left corner is in the injector's coordinates, if the frame shows only
+    /// part of the screen (one monitor). `None`: the frame is the whole screen.
+    pub origin: Option<(i32, i32)>,
+}
+
+/// A monitor that can be shown on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Monitor {
+    /// Stable while the monitor exists.
+    pub id: u32,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
 }
 
 pub trait Capturer: Send {
-    /// Captures the whole screen.
+    /// Captures the whole screen, or the selected monitor.
     fn capture(&mut self) -> anyhow::Result<Frame>;
+
+    /// The monitors that can be selected. Fewer than two means there is nothing to choose.
+    fn monitors(&mut self) -> anyhow::Result<Vec<Monitor>> {
+        Ok(Vec::new())
+    }
+
+    /// Shows only monitor `id` from now on, or everything with `None`.
+    fn select_monitor(&mut self, id: Option<u32>) -> anyhow::Result<()> {
+        match id {
+            None => Ok(()),
+            Some(_) => anyhow::bail!("this screen cannot be split into monitors"),
+        }
+    }
 }
 
 pub trait Injector: Send {

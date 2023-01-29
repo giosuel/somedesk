@@ -4,7 +4,7 @@
 //! back with `upgrade_in_event_loop`. Locks are never held across an `.await`.
 
 use crate::keymap::keysym_for;
-use crate::{AppWindow, ContactItem, DeviceItem, Page, TransferItem, TrustLevel};
+use crate::{AppWindow, ContactItem, DeviceItem, MonitorChoice, Page, TransferItem, TrustLevel};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use somedesk_client::credentials::DeviceCredentials;
@@ -353,6 +353,10 @@ impl Controller {
         ui.on_share_clipboard_changed(move |v| {
             c.0.state.lock().unwrap().settings.share_clipboard = v;
             c.save_settings();
+        });
+        let c = self.clone();
+        ui.on_select_monitor(move |id| {
+            c.send_input(SessionMsg::SelectMonitor { id: (id >= 0).then_some(id as u32) });
         });
         let c = self.clone();
         ui.on_send_files(move || c.pick_and_send_files());
@@ -944,10 +948,25 @@ impl Controller {
                     ui.set_session_peer_fingerprint(fp.into());
                     ui.set_has_frame(false);
                     ui.set_session_view_only(false);
+                    ui.set_session_monitors(ModelRc::default());
+                    ui.set_session_monitor_selected(-1);
                     ui.set_latency("–".into());
                     ui.set_fps("–".into());
                     ui.set_outgoing_visible(false);
                     ui.set_page(Page::Session);
+                });
+            }
+            ViewerEvent::Monitors { list, selected } => {
+                let mut choices = vec![MonitorChoice { id: -1, label: "All".into() }];
+                for (i, m) in list.iter().enumerate() {
+                    // Numbered like the host's display settings; the primary one is marked.
+                    let label = if m.primary { format!("{} ★", i + 1) } else { format!("{}", i + 1) };
+                    choices.push(MonitorChoice { id: m.id as i32, label: label.into() });
+                }
+                let selected = selected.map_or(-1, |id| id as i32);
+                this.ui(move |ui| {
+                    ui.set_session_monitors(ModelRc::new(VecModel::from(choices)));
+                    ui.set_session_monitor_selected(selected);
                 });
             }
             ViewerEvent::ViewOnly => {

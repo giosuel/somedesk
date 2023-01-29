@@ -1,6 +1,6 @@
 //! X11 backend: `GetImage` capture and XTest input injection.
 
-use crate::{Capturer, Frame, Injector};
+use crate::{Capturer, Frame, Injector, Monitor};
 use anyhow::{bail, Context};
 use std::collections::HashMap;
 use x11rb::connection::Connection;
@@ -27,6 +27,8 @@ fn connect(display: Option<&str>) -> anyhow::Result<(RustConnection, Window)> {
 pub struct X11Capturer {
     conn: RustConnection,
     root: Window,
+    /// Selected monitor (RandR monitor name atom), or `None` for the whole screen.
+    selected: Option<u32>,
 }
 
 impl X11Capturer {
@@ -37,17 +39,68 @@ impl X11Capturer {
         if bpp != Some(32) {
             bail!("unsupported X11 pixel format (depth {depth}, {bpp:?} bits per pixel)");
         }
-        Ok(Self { conn, root })
+        Ok(Self { conn, root, selected: None })
+    }
+
+    fn monitor(&mut self, id: u32) -> anyhow::Result<Option<Monitor>> {
+        Ok(self.monitors()?.into_iter().find(|m| m.id == id))
     }
 }
 
 impl Capturer for X11Capturer {
     fn capture(&mut self) -> anyhow::Result<Frame> {
         let geo = self.conn.get_geometry(self.root)?.reply()?;
-        let (w, h) = (geo.width, geo.height);
-        let img = self.conn.get_image(ImageFormat::Z_PIXMAP, self.root, 0, 0, w, h, !0)?.reply().context("GetImage")?;
+        // The selected monitor, clipped to the screen; the whole screen if it went away.
+        let area = match self.selected {
+            Some(id) => self.monitor(id)?.map(|m| {
+                let x = m.x.clamp(0, geo.width as i32);
+                let y = m.y.clamp(0, geo.height as i32);
+                let w = (m.width as i32).min(geo.width as i32 - x).max(1);
+                let h = (m.height as i32).min(geo.height as i32 - y).max(1);
+                (x as i16, y as i16, w as u16, h as u16)
+            }),
+            None => None,
+        };
+        let (x, y, w, h) = area.unwrap_or((0, 0, geo.width, geo.height));
+        let img = self.conn.get_image(ImageFormat::Z_PIXMAP, self.root, x, y, w, h, !0)?.reply().context("GetImage")?;
         let stride = img.data.len() / h.max(1) as usize;
-        Ok(Frame { width: w as u32, height: h as u32, stride, data: img.data })
+        let origin = area.map(|_| (x as i32, y as i32));
+        Ok(Frame { width: w as u32, height: h as u32, stride, data: img.data, origin })
+    }
+
+    fn monitors(&mut self) -> anyhow::Result<Vec<Monitor>> {
+        use x11rb::protocol::randr::ConnectionExt as _;
+        let Ok(cookie) = self.conn.randr_get_monitors(self.root, true) else { return Ok(Vec::new()) };
+        let Ok(reply) = cookie.reply() else { return Ok(Vec::new()) };
+        let mut out = Vec::new();
+        for m in reply.monitors {
+            let name = self
+                .conn
+                .get_atom_name(m.name)?
+                .reply()
+                .map(|r| String::from_utf8_lossy(&r.name).into_owned())
+                .unwrap_or_default();
+            out.push(Monitor {
+                id: m.name,
+                name,
+                x: m.x as i32,
+                y: m.y as i32,
+                width: m.width as u32,
+                height: m.height as u32,
+                primary: m.primary,
+            });
+        }
+        Ok(out)
+    }
+
+    fn select_monitor(&mut self, id: Option<u32>) -> anyhow::Result<()> {
+        if let Some(id) = id {
+            if self.monitor(id)?.is_none() {
+                bail!("no such monitor");
+            }
+        }
+        self.selected = id;
+        Ok(())
     }
 }
 
@@ -248,5 +301,37 @@ mod tests {
         inj.scroll(0, 3).unwrap();
         inj.conn.sync().unwrap();
         assert!(inj.button(9, true).is_err());
+    }
+
+    #[test]
+    fn randr_monitors_can_be_captured_separately() {
+        let Some(d) = display() else { return };
+        let xrandr = |args: &[&str]| std::process::Command::new("xrandr").arg("-display").arg(&d).args(args).status();
+        if xrandr(&["--version"]).is_err() {
+            eprintln!("xrandr not installed, skipping");
+            return;
+        }
+        let mut cap = X11Capturer::open(Some(&d)).unwrap();
+        let full = cap.capture().unwrap();
+        let (w, h) = (full.width, full.height);
+        let left = format!("{}/1x{}/1+0+0", w / 2, h);
+        let right = format!("{}/1x{}/1+{}+0", w - w / 2, h, w / 2);
+        xrandr(&["--setmonitor", "SD-LEFT", &left, "none"]).unwrap();
+        xrandr(&["--setmonitor", "SD-RIGHT", &right, "none"]).unwrap();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let monitors = cap.monitors().unwrap();
+            let right = monitors.iter().find(|m| m.name == "SD-RIGHT").expect("right monitor listed");
+            assert_eq!((right.x, right.width, right.height), ((w / 2) as i32, w - w / 2, h));
+            cap.select_monitor(Some(right.id)).unwrap();
+            let f = cap.capture().unwrap();
+            assert_eq!((f.width, f.height, f.origin), (w - w / 2, h, Some(((w / 2) as i32, 0))));
+            cap.select_monitor(None).unwrap();
+            let f = cap.capture().unwrap();
+            assert_eq!((f.width, f.height, f.origin), (w, h, None));
+            assert!(cap.select_monitor(Some(0xDEAD)).is_err());
+        }));
+        let _ = xrandr(&["--delmonitor", "SD-LEFT"]);
+        let _ = xrandr(&["--delmonitor", "SD-RIGHT"]);
+        result.unwrap();
     }
 }

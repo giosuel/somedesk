@@ -5,7 +5,7 @@ end-to-end encrypted sessions and zero-knowledge password login.
 
 **Status:** Linux ↔ Linux remote control works end to end through the relay, on X11 and on
 Wayland (GNOME/KDE via the desktop portal), with clipboard sharing, file transfer in both
-directions and password recovery.
+directions, a choice of which monitor to view, and password recovery.
 
 ## Architecture
 
@@ -87,7 +87,8 @@ target/release/somedesk --server your.server.example
 
 ## Linux desktops
 
-The host picks its backend from the session: **X11** (XGetImage + XTest), or on **Wayland** the
+The host picks its backend from the session: **X11** (XGetImage + XTest; RandR monitors can be
+viewed one at a time), or on **Wayland** the
 **xdg-desktop-portal** (`RemoteDesktop` + `ScreenCast`, frames over PipeWire).
 `SOMEDESK_BACKEND=x11|portal` overrides the choice.
 

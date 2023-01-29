@@ -184,7 +184,7 @@ impl Capturer for PortalCapturer {
             bail!("no frames from the screen sharing stream");
         }
         let f = s.latest.as_ref().expect("checked above");
-        Ok(Frame { width: f.width, height: f.height, stride: f.stride, data: f.data.clone() })
+        Ok(Frame { width: f.width, height: f.height, stride: f.stride, data: f.data.clone(), origin: None })
     }
 }
 
@@ -509,7 +509,7 @@ fn pipewire_main(
                 }
             };
             let mut s = frames.state.lock().unwrap();
-            s.latest = Some(Frame { width: w, height: h, stride, data });
+            s.latest = Some(Frame { width: w, height: h, stride, data, origin: None });
             frames.cond.notify_all();
         })
         .register()?;

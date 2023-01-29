@@ -11,6 +11,16 @@ pub const MAX_CLIPBOARD_TEXT: usize = 1 << 20;
 /// Size of the pieces files are sent in. Small enough not to hold up video for long.
 pub const FILE_CHUNK: usize = 64 * 1024;
 
+/// A monitor of the host that the viewer can choose to show on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitorInfo {
+    pub id: u32,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionMsg {
     /// Host → viewer: the user at the host accepted the connection.
@@ -21,6 +31,16 @@ pub enum SessionMsg {
     },
     /// Host → viewer: the screen is shared, but remote input is not allowed on the host.
     ViewOnly,
+    /// Host → viewer: the host's monitors (only sent if there are several) and which one is shown
+    /// (`None`: all of them).
+    Monitors {
+        list: Vec<MonitorInfo>,
+        selected: Option<u32>,
+    },
+    /// Viewer → host: show only this monitor, or all with `None`.
+    SelectMonitor {
+        id: Option<u32>,
+    },
     /// Host → viewer: current screen geometry.
     ScreenInfo {
         width: u32,
