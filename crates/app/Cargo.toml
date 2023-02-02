@@ -27,6 +27,7 @@ hex.workspace = true
 slint = { version = "1.18", features = ["unstable-winit-030"] }
 dirs = "6"
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [build-dependencies]
 slint-build = "1.18"

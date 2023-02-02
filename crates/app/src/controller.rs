@@ -4,7 +4,7 @@
 //! back with `upgrade_in_event_loop`. Locks are never held across an `.await`.
 
 use crate::keymap::keysym_for;
-use crate::{AppWindow, ContactItem, DeviceItem, MonitorChoice, Page, TransferItem, TrustLevel};
+use crate::{AppWindow, ContactItem, DeviceItem, MonitorChoice, Page, RecentItem, TransferItem, TrustLevel};
 use serde::{Deserialize, Serialize};
 use slint::{ComponentHandle, Image, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use somedesk_client::credentials::DeviceCredentials;
@@ -41,12 +41,35 @@ struct Settings {
     share_clipboard: bool,
     #[serde(default)]
     last_server: String,
+    /// Computers this device connected to recently, newest first.
+    #[serde(default)]
+    recent: Vec<Recent>,
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Recent {
+    device_id: u64,
+    label: String,
+}
+
+/// How many recent connections the home screen offers.
+const MAX_RECENT: usize = 4;
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { auto_accept_own_devices: false, share_clipboard: true, last_server: String::new() }
+        Self { auto_accept_own_devices: false, share_clipboard: true, last_server: String::new(), recent: Vec::new() }
     }
+}
+
+/// "Good morning, bob" etc., by local time.
+fn greeting(user: &str) -> String {
+    use chrono::Timelike;
+    let part = match chrono::Local::now().hour() {
+        5..12 => "Good morning",
+        12..18 => "Good afternoon",
+        _ => "Good evening",
+    };
+    format!("{part}, {user}")
 }
 
 fn yes() -> bool {
@@ -211,6 +234,7 @@ impl Controller {
             }
         }
         self.publish_contacts();
+        self.publish_recents();
     }
 
     fn trust_status(&self, cert: &DeviceCert) -> PeerStatus {
@@ -353,6 +377,13 @@ impl Controller {
         ui.on_share_clipboard_changed(move |v| {
             c.0.state.lock().unwrap().settings.share_clipboard = v;
             c.save_settings();
+        });
+        let c = self.clone();
+        ui.on_copy_id(move || {
+            let id = c.0.ui.upgrade().map(|ui| ui.get_my_id().replace(' ', "")).unwrap_or_default();
+            if !id.is_empty() && c.copy_text(&id) {
+                c.toast("ID copied", false);
+            }
         });
         let c = self.clone();
         ui.on_select_monitor(move |id| {
@@ -564,21 +595,57 @@ impl Controller {
         });
     }
 
-    fn copy_recovery_key(&self) {
-        let Some(ui) = self.0.ui.upgrade() else {
-            return;
-        };
-        let key = ui.get_recovery_key().replace('\n', "-");
+    /// Puts `text` on the system clipboard (kept alive for X11, which serves it from this app).
+    fn copy_text(&self, text: &str) -> bool {
         let result = somedesk_platform::default_clipboard().and_then(|mut c| {
-            c.set_text(&key)?;
+            c.set_text(text)?;
             Ok(c)
         });
         match result {
             Ok(c) => {
                 self.0.state.lock().unwrap().copy_clipboard = Some(c);
-                ui.set_recovery_key_copied(true);
+                true
             }
-            Err(e) => self.toast(format!("Could not copy: {e}"), true),
+            Err(e) => {
+                self.toast(format!("Could not copy: {e}"), true);
+                false
+            }
+        }
+    }
+
+    fn remember_recent(&self, device_id: u64, label: String) {
+        {
+            let mut st = self.0.state.lock().unwrap();
+            let recent = &mut st.settings.recent;
+            recent.retain(|r| r.device_id != device_id);
+            recent.insert(0, Recent { device_id, label });
+            recent.truncate(MAX_RECENT);
+        }
+        self.save_settings();
+        self.publish_recents();
+    }
+
+    fn publish_recents(&self) {
+        let items: Vec<RecentItem> = self
+            .0
+            .state
+            .lock()
+            .unwrap()
+            .settings
+            .recent
+            .iter()
+            .map(|r| RecentItem { id: r.device_id.to_string().into(), label: r.label.clone().into() })
+            .collect();
+        self.ui(move |ui| ui.set_recents(ModelRc::new(VecModel::from(items))));
+    }
+
+    fn copy_recovery_key(&self) {
+        let Some(ui) = self.0.ui.upgrade() else {
+            return;
+        };
+        let key = ui.get_recovery_key().replace('\n', "-");
+        if self.copy_text(&key) {
+            ui.set_recovery_key_copied(true);
         }
     }
 
@@ -617,6 +684,7 @@ impl Controller {
             ui.set_my_id(id.into());
             ui.set_my_device_name(name.into());
             ui.set_user_letter(letter(&user).into());
+            ui.set_greeting(greeting(&user).into());
             ui.set_username(user.into());
             ui.set_fingerprint(fp.into());
             ui.set_server_label(format!("Server {server}").into());
@@ -941,9 +1009,13 @@ impl Controller {
                 if !same_account {
                     this.with_trust(|t| t.remember(&remembered));
                 }
+                let recent = if same_account { remembered.device_name.clone() } else { peer_label.clone() };
+                this.remember_recent(device_id, recent);
                 let (label, id, fp) = (peer_label.clone(), peer_id.clone(), peer_fp.clone());
+                let peer_letter = letter(&remembered.username);
                 this.ui(move |ui| {
                     ui.set_session_peer(label.into());
+                    ui.set_session_peer_letter(peer_letter.into());
                     ui.set_session_peer_id(id.into());
                     ui.set_session_peer_fingerprint(fp.into());
                     ui.set_has_frame(false);
