@@ -25,7 +25,7 @@ directions, a choice of which monitor to view, and password recovery.
 | `client` | Server connection, account flows, host and viewer session pipelines |
 | `codec` | H.264 encode/decode (OpenH264) |
 | `platform` | Screen capture, input injection and clipboard (Linux: X11, and Wayland via the desktop portal + PipeWire) |
-| `app` | Desktop client (Slint) |
+| `app` | Desktop client (Slint); fonts: Geist / Geist Mono (OFL) |
 | `e2e-tests` | Integration tests: real server + PostgreSQL + relay + clients |
 
 ## Security model
@@ -102,6 +102,12 @@ view-only and the viewer is told.
 Known gaps: the view-only path on wlroots is untested (xdg-desktop-portal-wlr cannot capture a
 GPU-less headless sway); clipboard sharing on GNOME Wayland goes through XWayland, since GNOME
 does not offer the Wayland data-control protocol.
+
+## Brand
+
+`assets/brand/` holds the logo (`logo.svg`, `mark.svg`) and the app icon (`app-icon.svg` plus PNG
+renders). `assets/icons/` is the icon set: 24 px, 2 px round strokes. Icons are defined once in
+`scripts/gen-icons.py`, which writes both the SVGs and `crates/app/ui/icons.slint`.
 
 ## Tests
 

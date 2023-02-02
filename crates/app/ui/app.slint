@@ -1,11 +1,11 @@
 import { Theme } from "theme.slint";
 import { LoginPage } from "login.slint";
-import { HomePage, DeviceItem, ContactItem } from "home.slint";
+import { HomePage, DeviceItem, ContactItem, RecentItem } from "home.slint";
 import { SessionPage, MonitorChoice } from "session.slint";
 import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
 
-export { DeviceItem, TransferItem, ContactItem, TrustLevel, MonitorChoice }
+export { DeviceItem, TransferItem, ContactItem, TrustLevel, MonitorChoice, RecentItem }
 
 export enum Page { starting, login, home, session }
 
@@ -15,7 +15,8 @@ export component AppWindow inherits Window {
     preferred-height: 760px;
     min-width: 960px;
     min-height: 640px;
-    default-font-family: "Inter";
+    default-font-family: "Geist";
+    icon: @image-url("../../../assets/brand/app-icon-256.png");
     background: Theme.bg;
 
     in-out property <Page> page: Page.starting;
@@ -43,6 +44,9 @@ export component AppWindow inherits Window {
     in property <bool> online;
     in property <string> status-text;
     in property <[DeviceItem]> devices;
+    in property <string> greeting;
+    in property <[RecentItem]> recents;
+    callback copy-id();
     in property <[ContactItem]> contacts;
     callback revoke-contact(string);
     callback forget-contact(string);
@@ -80,6 +84,7 @@ export component AppWindow inherits Window {
     // Session
     in property <string> session-peer;
     in property <string> session-peer-id;
+    in property <string> session-peer-letter;
     in property <string> session-peer-fingerprint;
     in property <image> remote-frame;
     in property <bool> has-frame;
@@ -159,6 +164,9 @@ export component AppWindow inherits Window {
         online: root.online;
         status-text: root.status-text;
         devices: root.devices;
+        greeting: root.greeting;
+        recents: root.recents;
+        copy-id => { root.copy-id(); }
         contacts: root.contacts;
         revoke-contact(u) => { root.revoke-contact(u); }
         forget-contact(u) => { root.forget-contact(u); }
@@ -179,6 +187,7 @@ export component AppWindow inherits Window {
     if root.page == Page.session: SessionPage {
         peer: root.session-peer;
         peer-id: root.session-peer-id;
+        peer-letter: root.session-peer-letter;
         peer-fingerprint: root.session-peer-fingerprint;
         frame: root.remote-frame;
         has-frame: root.has-frame;

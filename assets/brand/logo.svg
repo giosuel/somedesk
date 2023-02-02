@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="128" viewBox="0 0 280 64">
+  <title>SomeDesk</title>
+  <rect width="64" height="64" rx="15" fill="#7dd3c0"/>
+  <rect x="11" y="14" width="38" height="27" rx="5" fill="none" stroke="#0e0f12" stroke-width="4.2"/>
+  <path d="M33.5 29.5 L33.5 53 L39.4 47.3 L43.6 56.2 L48.3 54 L44.1 45.2 L52.2 45.2 Z" fill="#0e0f12" stroke="#7dd3c0" stroke-width="2.6" stroke-linejoin="round"/>
+  <text x="80" y="43" font-family="Geist, sans-serif" font-weight="600" font-size="34" letter-spacing="-0.8" fill="#eceef2">SomeDesk</text>
+</svg>

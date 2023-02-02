@@ -1,50 +1,40 @@
-import "fonts/Inter-Regular.ttf";
-import "fonts/Inter-Medium.ttf";
-import "fonts/Inter-SemiBold.ttf";
-import "fonts/Inter-Bold.ttf";
+import "fonts/Geist-Regular.ttf";
+import "fonts/Geist-Medium.ttf";
+import "fonts/Geist-SemiBold.ttf";
+import "fonts/Geist-Bold.ttf";
+import "fonts/GeistMono-Regular.ttf";
+import "fonts/GeistMono-Medium.ttf";
+export { Icons } from "icons.slint";
 
+// Clean dark: near-black surfaces in three steps, hairline borders, one soft teal accent.
 export global Theme {
-    out property <color> bg: #0b0d12;
-    out property <color> panel: #10131a;
-    out property <color> card: #151922;
-    out property <color> card-hover: #1b2030;
-    out property <color> input-bg: #0f1218;
-    out property <color> border: #232a38;
-    out property <color> border-strong: #303849;
-    out property <color> text: #e9ecf2;
-    out property <color> muted: #8a93a6;
-    out property <color> subtle: #5b6478;
-    out property <color> accent: #6d5dfc;
-    out property <color> accent-soft: #6d5dfc26;
-    out property <color> blue: #3e8bff;
-    out property <color> success: #22c55e;
-    out property <color> success-soft: #22c55e1f;
-    out property <color> danger: #f0526a;
-    out property <color> danger-soft: #f0526a1f;
-    out property <color> warning: #f5a524;
-    out property <color> warning-soft: #f5a5241f;
-    out property <brush> accent-gradient: @linear-gradient(135deg, #7b61ff 0%, #3e8bff 100%);
-    out property <string> mono: "DejaVu Sans Mono";
-}
-
-// 24x24 stroke icons (drawn for SomeDesk, Lucide-style).
-export global Icons {
-    out property <string> monitor: "M3 4 H21 V16 H3 Z M8 20 H16 M12 16 V20";
-    out property <string> lock: "M5 11 H19 V21 H5 Z M8 11 V7 A4 4 0 0 1 16 7 V11";
-    out property <string> shield: "M12 3 L20 6 V12 C20 16.5 16.5 19.8 12 21 C7.5 19.8 4 16.5 4 12 V6 Z M9 12 L11 14 L15 10";
-    out property <string> bolt: "M13 2 L4 14 H11 L10 22 L19 10 H12 Z";
-    out property <string> key: "M7.5 15.5 A3.5 3.5 0 1 1 7.5 15.49 M10 13 L20 3 M16 7 L19 10 M14 9 L16 11";
-    out property <string> power: "M12 3 V12 M6.3 6.3 A8 8 0 1 0 17.7 6.3";
-    out property <string> arrow-right: "M5 12 H19 M13 6 L19 12 L13 18";
-    out property <string> logout: "M15 4 H19 V20 H15 M10 8 L6 12 L10 16 M6 12 H16";
-    out property <string> server: "M4 4 H20 V10 H4 Z M4 14 H20 V20 H4 Z M8 7 H8.01 M8 17 H8.01";
-    out property <string> fingerprint: "M12 11 V14 M8 8.5 A5 5 0 0 1 17 11 V13 M7 12 V14 A5 5 0 0 0 9 18 M15 16 A4 4 0 0 1 14.5 18";
-    out property <string> x: "M6 6 L18 18 M18 6 L6 18";
-    out property <string> upload: "M12 16 V4 M7 9 L12 4 L17 9 M4 15 V20 H20 V15";
-    out property <string> download: "M12 4 V16 M7 11 L12 16 L17 11 M4 15 V20 H20 V15";
-    out property <string> file: "M6 3 H14 L19 8 V21 H6 Z M14 3 V8 H19";
-    out property <string> copy: "M9 9 H20 V20 H9 Z M5 15 H4 V4 H15 V5";
-    out property <string> arrow-left: "M19 12 H5 M11 6 L5 12 L11 18";
-    out property <string> life-buoy: "M12 3 A9 9 0 1 1 11.99 3 M12 8 A4 4 0 1 1 11.99 8 M5.6 5.6 L9.2 9.2 M14.8 14.8 L18.4 18.4 M18.4 5.6 L14.8 9.2 M9.2 14.8 L5.6 18.4";
-    out property <string> link: "M10 14 L14 10 M9 7 L11 5 A4 4 0 0 1 19 13 L17 15 M15 17 L13 19 A4 4 0 0 1 5 11 L7 9";
+    out property <color> bg: #0e0f12;
+    out property <color> sidebar: #0e0f12;
+    out property <color> surface: #16181d;
+    out property <color> raised: #1c1f25;
+    out property <color> hover: #22252c;
+    out property <color> input-bg: #0e0f12;
+    out property <color> border: #23262d;
+    out property <color> border-strong: #2a2e36;
+    out property <color> text: #eceef2;
+    out property <color> text-2: #c3c8d0;
+    out property <color> muted: #9aa1ad;
+    out property <color> subtle: #7c828d;
+    out property <color> faint: #5f6672;
+    out property <color> accent: #7dd3c0;
+    out property <color> accent-hover: #93ddcc;
+    out property <color> accent-soft: #18241f;
+    out property <color> on-accent: #0b1412;
+    out property <color> success: #7dd3c0;
+    out property <color> warning: #f0b35a;
+    out property <color> warning-soft: #2a2114;
+    out property <color> warning-text: #e8d5b5;
+    out property <color> danger: #e5484d;
+    out property <color> danger-hover: #ec5d62;
+    out property <color> danger-soft: #2c1517;
+    out property <color> danger-text: #ff9c9f;
+    out property <color> scrim: #050608b8;
+    out property <length> radius: 12px;
+    out property <length> radius-lg: 16px;
+    out property <string> mono: "Geist Mono";
 }
