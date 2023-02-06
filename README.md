@@ -5,7 +5,8 @@ end-to-end encrypted sessions and zero-knowledge password login.
 
 **Status:** Linux ↔ Linux remote control works end to end through the relay, on X11 and on
 Wayland (GNOME/KDE via the desktop portal), with clipboard sharing, file transfer in both
-directions, a choice of which monitor to view, and password recovery.
+directions, a choice of which monitor to view, direct peer-to-peer connections with relay
+fallback, and password recovery.
 
 ## Architecture
 
@@ -56,6 +57,13 @@ directions, a choice of which monitor to view, and password recovery.
   partial file and only keeps it if size and SHA-256 match; names are sanitized so a peer cannot
   write outside `~/Downloads/SomeDesk`. The host saves files from the viewer directly (the viewer
   controls it anyway); the viewer is asked before accepting each file from the host.
+* **Direct connections:** when both devices allow it, they exchange candidate addresses through
+  the server and connect straight to each other over QUIC (hole punching through NATs, with
+  low-TTL punch packets so stray first packets don't spoil the NAT mapping). Whichever path the
+  viewer's first Noise message arrives on wins; if nothing direct works within 2.5 s, the relay is
+  used. The QUIC layer of a direct connection uses throwaway certificates; authenticity comes from
+  the Noise handshake as always. Turning direct connections off keeps a device's IP addresses from
+  being shared with peers.
 * **What the server does see:** who connects to whom, when, and how much data flows.
 * **Recovery key:** a second copy of the identity key is sealed under a 160-bit recovery key that
   is shown once at sign-up (`XXXX-XXXX-…`, with a checksum that catches typos). To reset a
@@ -117,6 +125,10 @@ scripts/test.sh          # everything: unit tests, X11 tests on a private Xvfb, 
 
 The clipboard test also needs `xsel`. Database tests need `SOMEDESK_TEST_DATABASE_URL` (an admin connection used to create throwaway
 databases; `scripts/test.sh` defaults to the local dev role). X11 tests need `Xvfb`.
+
+`scripts/nat-test.sh` (needs sudo) builds two private networks behind real Linux NATs with
+network namespaces and checks that peers connect directly behind ordinary NATs and fall back to the
+relay behind symmetric ones.
 
 `scripts/demo-env.sh` starts a server and two virtual displays for manual testing.
 `scripts/wayland-env.sh` starts a headless GNOME Wayland session (with PipeWire and the portal);

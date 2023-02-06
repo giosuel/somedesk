@@ -11,6 +11,7 @@
 #![allow(clippy::large_enum_variant)]
 
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 pub type SessionId = [u8; 16];
 
@@ -78,6 +79,13 @@ pub enum Request {
         device_id: u64,
         token: [u8; 32],
     },
+    /// Where this device can be reached directly (its local addresses; the server adds the
+    /// public address it sees). With `allow_direct: false` no addresses are shared with peers
+    /// and sessions always use the relay.
+    SetCandidates {
+        local: Vec<SocketAddr>,
+        allow_direct: bool,
+    },
     ListDevices,
     LookupDevice {
         device_id: u64,
@@ -135,9 +143,11 @@ pub enum Response {
     },
     Devices(Vec<DeviceInfo>),
     Device(DeviceInfo),
+    /// `candidates`: addresses where the host might be reached directly (empty: relay only).
     Connect {
         session_id: SessionId,
         host: DeviceInfo,
+        candidates: Vec<SocketAddr>,
     },
     Pong,
 }
@@ -145,7 +155,8 @@ pub enum Response {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
     /// Another device wants to open a session with us. Join the relay with `session_id`.
-    IncomingSession { session_id: SessionId, from: DeviceInfo },
+    /// `candidates`: addresses where the viewer might be reached directly (empty: relay only).
+    IncomingSession { session_id: SessionId, from: DeviceInfo, candidates: Vec<SocketAddr> },
     /// Presence of one of our own devices changed.
     DevicePresence { device_id: u64, online: bool },
 }
@@ -248,6 +259,12 @@ pub struct DeviceInfo {
     pub name: String,
     pub online: bool,
     pub cert: DeviceCert,
+}
+
+/// First frame on every direct (peer-to-peer) stream, naming the session it belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DirectHello {
+    pub session_id: SessionId,
 }
 
 /// First frame on every relay stream.

@@ -51,10 +51,12 @@ async fn start_viewer_with(viewer: &Device, host_id: u64, extras: SessionExtras)
     ViewerSide { input, frames, accepted, task }
 }
 
-async fn next_incoming(host: &mut Device) -> (somedesk_proto::control::SessionId, somedesk_proto::control::DeviceInfo) {
+async fn next_incoming(
+    host: &mut Device,
+) -> (somedesk_proto::control::SessionId, somedesk_proto::control::DeviceInfo, Vec<std::net::SocketAddr>) {
     loop {
         match tokio::time::timeout(T, host.events.recv()).await.expect("incoming session").unwrap() {
-            Event::IncomingSession { session_id, from } => return (session_id, from),
+            Event::IncomingSession { session_id, from, candidates } => return (session_id, from, candidates),
             _ => continue,
         }
     }
@@ -84,15 +86,16 @@ async fn remote_control_session_end_to_end() {
     let Some(ts) = TestServer::start().await else {
         return;
     };
-    let viewer_dev = ts.signup("alice-marker-user", "correct horse battery", "alice-laptop").await;
+    // This test is about the relay: keep the session off the direct path.
+    let viewer_dev = ts.signup("alice-marker-user", "correct horse battery", "alice-laptop").await.relay_only().await;
     let mut host_dev = ts.signup("bob", "correct horse battery", "bob-desktop").await;
     let host_id = host_dev.creds.device_id;
 
     let viewer_task = start_viewer(&viewer_dev, host_id);
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
         assert_eq!(from.username, "alice-marker-user");
-        let ch = session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.expect("host handshake");
+        let ch = session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.expect("host handshake");
         assert_eq!(ch.peer.username, "alice-marker-user", "host sees the verified viewer identity");
         ch
     };
@@ -175,8 +178,8 @@ async fn host_can_reject() {
     let host_id = host_dev.creds.device_id;
     let reason = "SECRET-REJECT-REASON-visible-only-to-peer";
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        let ch = session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap();
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        let ch = session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap();
         host::reject(ch, reason).await;
     };
     let (v, _) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
@@ -195,8 +198,8 @@ async fn host_stop_ends_viewer_session() {
     let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
     let host_id = host_dev.creds.device_id;
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -229,14 +232,14 @@ async fn third_party_cannot_join_a_session() {
     let mallory = ts.signup("mallory", "correct horse battery", "evil").await;
 
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
         // Mallory learns the session id somehow and races to join the relay first.
         let (mut ms, mut mr) = mallory.conn.open_relay(sid).await.unwrap();
         let _ = ms.write_all(b"garbage").await;
         let mut buf = [0u8; 16];
         let got = tokio::time::timeout(Duration::from_millis(500), mr.read(&mut buf)).await;
         assert!(!matches!(got, Ok(Ok(Some(n))) if n > 0), "mallory must not receive session data");
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
     let (_stop_tx, stop_rx) = watch::channel(false);
@@ -266,8 +269,8 @@ async fn clipboard_is_shared_both_ways() {
     let viewer_clip = FakeClipboard::with_text("VIEWER-COPIED-sudo apt upgrade");
     let host_clip = FakeClipboard::with_text("HOST-PRIVATE-clipboard-before-session");
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let (mut v, ch) = tokio::join!(start_viewer_with(&viewer_dev, host_id, clipboard_extras(&viewer_clip)), host_side);
     let (_stop_tx, stop_rx) = watch::channel(false);
@@ -331,8 +334,8 @@ async fn x11_host_end_to_end() {
     let mut host_dev = ts.signup("bob", "correct horse battery", "desktop").await;
     let host_id = host_dev.creds.device_id;
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
     let cap = somedesk_platform::linux::x11::X11Capturer::open(Some(&display)).unwrap();
@@ -397,8 +400,8 @@ async fn wayland_portal_host_end_to_end() {
     let mut host_dev = ts.signup("bob", "correct horse battery", "gnome-desktop").await;
     let host_id = host_dev.creds.device_id;
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let (mut v, ch) = tokio::join!(start_viewer(&viewer_dev, host_id), host_side);
 
@@ -494,8 +497,8 @@ async fn files_are_transferred_both_ways() {
     let viewer_files = FileTransfers::new(viewer_dl.clone(), AcceptPolicy::Ask, viewer_sink);
 
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let viewer_extras = SessionExtras { files: Some(viewer_files.clone()), ..Default::default() };
     let (mut v, ch) = tokio::join!(start_viewer_with(&viewer_dev, host_id, viewer_extras), host_side);
@@ -593,8 +596,8 @@ async fn interrupted_transfers_leave_no_partial_files() {
     let viewer_files = FileTransfers::new(tmp.join("viewer-dl"), AcceptPolicy::Ask, viewer_sink);
 
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let viewer_extras = SessionExtras { files: Some(viewer_files.clone()), ..Default::default() };
     let (mut v, ch) = tokio::join!(start_viewer_with(&viewer_dev, host_id, viewer_extras), host_side);
@@ -650,8 +653,8 @@ async fn swapped_identity_is_detected() {
     // First contact: bob is new, then remembered.
     let host_id = host_dev.creds.device_id;
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let ((ch, _), _host_ch) = tokio::join!(
         async { session::connect(&viewer_dev.conn, &viewer_dev.creds, host_id).await.unwrap() },
@@ -667,8 +670,8 @@ async fn swapped_identity_is_detected() {
     let mut impostor = ts.signup("bob", "attacker password", "desktop").await;
     let impostor_id = impostor.creds.device_id;
     let impostor_side = async {
-        let (sid, from) = next_incoming(&mut impostor).await;
-        session::accept(&impostor.conn, &impostor.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut impostor).await;
+        session::accept(&impostor.conn, &impostor.creds, sid, &from, &cands).await.unwrap()
     };
     let ((ch, _), _imp_ch) = tokio::join!(
         async { session::connect(&viewer_dev.conn, &viewer_dev.creds, impostor_id).await.unwrap() },
@@ -696,8 +699,8 @@ async fn viewer_can_pick_a_monitor() {
     let (ftx, mut frames) = mpsc::unbounded_channel::<RgbFrame>();
     let (atx, mut accepted) = mpsc::unbounded_channel();
     let host_side = async {
-        let (sid, from) = next_incoming(&mut host_dev).await;
-        session::accept(&host_dev.conn, &host_dev.creds, sid, &from).await.unwrap()
+        let (sid, from, cands) = next_incoming(&mut host_dev).await;
+        session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.unwrap()
     };
     let viewer_side = async {
         let (ch, _) = session::connect(&viewer_dev.conn, &viewer_dev.creds, host_id).await.unwrap();

@@ -7,7 +7,7 @@ use somedesk_crypto::opaque::{self, ServerLoginState};
 use somedesk_crypto::recovery;
 use somedesk_proto::control::*;
 use somedesk_proto::frame::{read_msg, write_msg};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,6 +16,8 @@ use tokio::sync::mpsc;
 /// Login/registration attempts per minute, per IP and per username.
 const AUTH_LIMIT: u32 = 20;
 const MAX_DEVICE_NAME: usize = 64;
+/// Local addresses a device may announce for direct connections.
+const MAX_CANDIDATES: usize = 8;
 
 enum AuthState {
     Anonymous,
@@ -55,6 +57,8 @@ struct Ctx {
     shared: Arc<Shared>,
     conn_id: u64,
     ip: IpAddr,
+    /// The client's address as seen from here (its public address behind NAT).
+    remote: SocketAddr,
     tx: mpsc::UnboundedSender<ServerFrame>,
     state: AuthState,
     /// Device id once authenticated, read by the relay stream acceptor.
@@ -69,7 +73,8 @@ pub async fn handle(shared: Arc<Shared>, incoming: quinn::Incoming) {
             return;
         }
     };
-    let ip = conn.remote_address().ip();
+    let remote = conn.remote_address();
+    let ip = remote.ip();
     let (mut send, mut recv) = match tokio::time::timeout(Duration::from_secs(10), conn.accept_bi()).await {
         Ok(Ok(s)) => s,
         _ => return,
@@ -97,7 +102,7 @@ pub async fn handle(shared: Arc<Shared>, incoming: quinn::Incoming) {
         })
     };
 
-    let mut ctx = Ctx { shared, conn_id, ip, tx, state: AuthState::Anonymous, device_slot };
+    let mut ctx = Ctx { shared, conn_id, ip, remote, tx, state: AuthState::Anonymous, device_slot };
     loop {
         let frame: ClientFrame = match read_msg(&mut recv).await {
             Ok(Some(f)) => f,
@@ -341,13 +346,35 @@ impl Ctx {
                 self.state =
                     AuthState::Device { user_id: device.user_id, username: device.username.clone(), device_id };
                 *self.device_slot.lock().unwrap() = Some(device_id);
-                self.shared
-                    .online
-                    .insert(device_id, Online { conn_id: self.conn_id, user_id: device.user_id, tx: self.tx.clone() });
+                self.shared.online.insert(
+                    device_id,
+                    Online {
+                        conn_id: self.conn_id,
+                        user_id: device.user_id,
+                        tx: self.tx.clone(),
+                        candidates: Vec::new(),
+                    },
+                );
                 self.broadcast_presence(device.user_id, device_id, true);
                 let _ = db::touch_device(&db, device_id).await;
                 tracing::info!(device_id, user = %device.username, "device online");
                 Ok(Response::Authenticated { username: device.username.clone(), device: self.device_info(&device) })
+            }
+
+            Request::SetCandidates { local, allow_direct } => {
+                let (_, _, device_id) = self.require_device()?;
+                let mut candidates = Vec::new();
+                if allow_direct {
+                    // The address we see first: it works across NAT if the peer's packets open it.
+                    candidates.push(self.remote);
+                    candidates.extend(local.into_iter().filter(|a| *a != self.remote).take(MAX_CANDIDATES));
+                }
+                if let Some(mut o) = self.shared.online.get_mut(&device_id) {
+                    if o.conn_id == self.conn_id {
+                        o.candidates = candidates;
+                    }
+                }
+                Ok(Response::Ok)
             }
 
             Request::ListDevices => {
@@ -376,8 +403,8 @@ impl Ctx {
                     return Err(err(ErrorCode::NotAuthenticated, "this device was removed"));
                 };
                 let session_id = relay::new_session_id();
-                let host_tx = self.shared.online.get(&device_id).map(|o| o.tx.clone());
-                let Some(host_tx) = host_tx else {
+                let host = self.shared.online.get(&device_id).map(|o| (o.tx.clone(), o.candidates.clone()));
+                let Some((host_tx, host_candidates)) = host else {
                     return Err(err(ErrorCode::Offline, "the device is offline"));
                 };
                 self.shared
@@ -386,12 +413,22 @@ impl Ctx {
                     .unwrap()
                     .insert(session_id, relay::PendingSession::new(my_device, device_id));
                 let from = self.device_info(&me);
-                if host_tx.send(ServerFrame::Event(Event::IncomingSession { session_id, from })).is_err() {
+                // Direct connections only if both sides want them; otherwise neither learns the
+                // other's addresses.
+                let my_candidates =
+                    self.shared.online.get(&my_device).map(|o| o.candidates.clone()).unwrap_or_default();
+                let (my_candidates, host_candidates) = if my_candidates.is_empty() || host_candidates.is_empty() {
+                    (Vec::new(), Vec::new())
+                } else {
+                    (my_candidates, host_candidates)
+                };
+                let event = Event::IncomingSession { session_id, from, candidates: my_candidates };
+                if host_tx.send(ServerFrame::Event(event)).is_err() {
                     self.shared.sessions.lock().unwrap().remove(&session_id);
                     return Err(err(ErrorCode::Offline, "the device is offline"));
                 }
                 db::audit(&db, Some(user_id), Some(my_device), "connect", Some(&device_id.to_string())).await;
-                Ok(Response::Connect { session_id, host: self.device_info(&target) })
+                Ok(Response::Connect { session_id, host: self.device_info(&target), candidates: host_candidates })
             }
 
             Request::RemoveDevice { device_id } => {

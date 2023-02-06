@@ -1,6 +1,7 @@
 //! Connection to the SomeDesk server.
 
 use crate::credentials::DeviceCredentials;
+use crate::direct::DirectHub;
 use crate::tls::PinningVerifier;
 use crate::{ClientError, Result};
 use somedesk_crypto::keys::{DeviceKey, IdentityKey};
@@ -24,6 +25,7 @@ pub struct ServerConn {
     pending: Pending,
     next_id: AtomicU32,
     fingerprint: [u8; 32],
+    direct: Arc<DirectHub>,
 }
 
 /// The result of a password login: the decrypted identity key.
@@ -85,7 +87,13 @@ impl ServerConn {
         cfg.transport_config(Arc::new(transport));
 
         let bind: SocketAddr = if addr.is_ipv6() { "[::]:0".parse().unwrap() } else { "0.0.0.0:0".parse().unwrap() };
-        let mut endpoint = quinn::Endpoint::client(bind).map_err(transport_err)?;
+        // We own the socket so the direct-connection code can also send hole-punching packets
+        // from it (see `direct`).
+        let socket = std::net::UdpSocket::bind(bind).map_err(transport_err)?;
+        let punch_socket = socket.try_clone().map_err(transport_err)?;
+        let runtime = quinn::default_runtime().ok_or_else(|| ClientError::Transport("no async runtime".into()))?;
+        let mut endpoint =
+            quinn::Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime).map_err(transport_err)?;
         endpoint.set_default_client_config(cfg);
         let conn =
             tokio::time::timeout(Duration::from_secs(10), endpoint.connect(addr, "somedesk").map_err(transport_err)?)
@@ -93,6 +101,9 @@ impl ServerConn {
                 .map_err(|_| ClientError::Transport(format!("timed out connecting to {server}")))?
                 .map_err(transport_err)?;
         let fingerprint = verifier.seen().ok_or(ClientError::Protocol("no server certificate"))?;
+        // The same UDP socket accepts direct connections from peers, so its NAT mapping (opened
+        // by talking to the server) can be reused for them.
+        let direct = DirectHub::install(&endpoint, punch_socket)?;
 
         let (send, mut recv) = conn.open_bi().await.map_err(transport_err)?;
         let pending: Pending = Arc::default();
@@ -123,6 +134,7 @@ impl ServerConn {
             pending,
             next_id: AtomicU32::new(1),
             fingerprint,
+            direct,
         });
         match this.request(Request::Hello { version: somedesk_proto::PROTOCOL_VERSION }).await? {
             Response::Hello { .. } => Ok((this, events_rx)),
@@ -303,11 +315,35 @@ impl ServerConn {
     }
 
     /// Authenticates as an enrolled device; the device is online while this connection lives.
+    /// Also tells the server where the device can be reached directly (see
+    /// [`ServerConn::set_allow_direct`]).
     pub async fn authenticate(&self, creds: &DeviceCredentials) -> Result<DeviceInfo> {
-        match self.request(Request::TokenAuth { device_id: creds.device_id, token: creds.token }).await? {
-            Response::Authenticated { device, .. } => Ok(device),
+        let device = match self.request(Request::TokenAuth { device_id: creds.device_id, token: creds.token }).await? {
+            Response::Authenticated { device, .. } => device,
+            _ => return Err(unexpected()),
+        };
+        self.announce_candidates().await?;
+        Ok(device)
+    }
+
+    /// Whether sessions may use direct connections (default: yes). Without, this device's
+    /// addresses are never shared with peers. Takes effect with the next announcement.
+    pub fn set_allow_direct(&self, allow: bool) {
+        self.direct.set_allowed(allow);
+    }
+
+    /// Tells the server this device's direct-connection addresses (or that it wants none).
+    pub async fn announce_candidates(&self) -> Result<()> {
+        let allow_direct = self.direct.allowed();
+        let local = if allow_direct { self.direct.local_candidates() } else { Vec::new() };
+        match self.request(Request::SetCandidates { local, allow_direct }).await? {
+            Response::Ok => Ok(()),
             _ => Err(unexpected()),
         }
+    }
+
+    pub(crate) fn direct(&self) -> &Arc<DirectHub> {
+        &self.direct
     }
 
     pub async fn list_devices(&self) -> Result<Vec<DeviceInfo>> {
@@ -331,10 +367,11 @@ impl ServerConn {
         }
     }
 
-    /// Asks the server to set up a relayed session to `device_id`.
-    pub async fn request_session(&self, device_id: u64) -> Result<(SessionId, DeviceInfo)> {
+    /// Asks the server to set up a session to `device_id`. Returns the host's direct-connection
+    /// candidates too (empty: relay only).
+    pub async fn request_session(&self, device_id: u64) -> Result<(SessionId, DeviceInfo, Vec<SocketAddr>)> {
         match self.request(Request::Connect { device_id }).await? {
-            Response::Connect { session_id, host } => Ok((session_id, host)),
+            Response::Connect { session_id, host, candidates } => Ok((session_id, host, candidates)),
             _ => Err(unexpected()),
         }
     }

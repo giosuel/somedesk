@@ -42,8 +42,7 @@ pub async fn reject(ch: Channel, reason: &str) {
     let mut sender = ch.sender;
     let _ = sender.send(&SessionMsg::Reject { reason: reason.to_owned() }).await;
     let _ = sender.send(&SessionMsg::Bye).await;
-    let mut s = sender.into_inner();
-    let _ = s.finish();
+    crate::session::finish_stream(sender.into_inner()).await;
 }
 
 /// Accepts the session and serves it until the viewer leaves, an error occurs, or `stop`
@@ -160,7 +159,7 @@ pub async fn serve(
     };
     shared.running.store(false, Ordering::Relaxed);
     let _ = sender.send(&SessionMsg::Bye).await;
-    let _ = sender.into_inner().finish();
+    crate::session::finish_stream(sender.into_inner()).await;
     if let Some(f) = &files {
         f.detach().await;
     }

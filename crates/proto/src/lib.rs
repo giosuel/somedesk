@@ -9,6 +9,9 @@ pub mod control;
 pub mod frame;
 pub mod session;
 
+/// ALPN of direct QUIC connections between two devices.
+pub const P2P_ALPN: &[u8] = b"somedesk-p2p/1";
+
 /// ALPN identifier negotiated on the QUIC connection.
 pub const ALPN: &[u8] = b"somedesk/1";
 

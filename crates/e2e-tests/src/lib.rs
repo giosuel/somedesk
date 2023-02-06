@@ -117,6 +117,15 @@ pub struct FakeCapturer {
     pub bgra: Arc<Mutex<[u8; 4]>>,
 }
 
+impl Device {
+    /// Makes this device refuse direct connections, so its sessions use the relay.
+    pub async fn relay_only(self) -> Self {
+        self.conn.set_allow_direct(false);
+        self.conn.announce_candidates().await.expect("announce");
+        self
+    }
+}
+
 impl Capturer for FakeCapturer {
     fn capture(&mut self) -> anyhow::Result<Frame> {
         let px = *self.bgra.lock().unwrap();
