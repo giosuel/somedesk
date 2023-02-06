@@ -135,7 +135,7 @@ pub async fn run(
         r => r,
     };
     let _ = sender.send(&SessionMsg::Bye).await;
-    let _ = sender.into_inner().finish();
+    crate::session::finish_stream(sender.into_inner()).await;
     if let Some(f) = &files {
         f.detach().await;
     }

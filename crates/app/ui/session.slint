@@ -55,6 +55,7 @@ export component SessionPage inherits Rectangle {
     in property <string> fps;
     in property <string> resolution;
     in property <bool> view-only;
+    in property <string> route: "Encrypted";
     in property <[MonitorChoice]> monitors;
     in property <int> monitor-selected: -1;
     callback select-monitor(int);
@@ -99,7 +100,7 @@ export component SessionPage inherits Rectangle {
                         alignment: center;
                         spacing: 6px;
                         Icon { y: (parent.height - self.height) / 2; d: Icons.lock; size: 12px; color: Theme.accent; stroke: 2.4px; }
-                        Text { text: "Encrypted"; color: Theme.accent; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+                        Text { text: root.route; color: Theme.accent; font-size: 12px; font-weight: 500; vertical-alignment: center; }
                     }
                 }
                 if root.view-only: Rectangle {

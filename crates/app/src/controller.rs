@@ -41,6 +41,10 @@ struct Settings {
     share_clipboard: bool,
     #[serde(default)]
     last_server: String,
+    /// Let sessions connect directly between the two computers (this shares IP addresses with
+    /// the peer); otherwise everything goes through the relay.
+    #[serde(default = "yes")]
+    allow_direct: bool,
     /// Computers this device connected to recently, newest first.
     #[serde(default)]
     recent: Vec<Recent>,
@@ -57,7 +61,13 @@ const MAX_RECENT: usize = 4;
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { auto_accept_own_devices: false, share_clipboard: true, last_server: String::new(), recent: Vec::new() }
+        Self {
+            auto_accept_own_devices: false,
+            share_clipboard: true,
+            allow_direct: true,
+            last_server: String::new(),
+            recent: Vec::new(),
+        }
     }
 }
 
@@ -272,6 +282,16 @@ impl Controller {
         self.ui(move |ui| ui.set_contacts(ModelRc::new(VecModel::from(items))));
     }
 
+    /// Brings this device online on `conn`, with the user's direct-connection preference.
+    async fn authenticate(
+        &self,
+        conn: &ServerConn,
+        creds: &DeviceCredentials,
+    ) -> somedesk_client::Result<somedesk_proto::control::DeviceInfo> {
+        conn.set_allow_direct(self.0.state.lock().unwrap().settings.allow_direct);
+        conn.authenticate(creds).await
+    }
+
     fn settings_path(&self) -> PathBuf {
         self.0.dir.join("settings.json")
     }
@@ -320,6 +340,7 @@ impl Controller {
             .unwrap_or_else(|| "localhost".into());
         let auto_accept = settings.auto_accept_own_devices;
         let share_clipboard = settings.share_clipboard;
+        let allow_direct = settings.allow_direct;
         let trust_path = self.trust_path();
         let trust = TrustStore::load(&trust_path).unwrap_or_else(|e| {
             // Keep the unreadable file for inspection rather than overwriting it.
@@ -339,6 +360,7 @@ impl Controller {
             ui.set_login_device_name(hostname().into());
             ui.set_auto_accept(auto_accept);
             ui.set_share_clipboard(share_clipboard);
+            ui.set_allow_direct(allow_direct);
         });
         match DeviceCredentials::load(&self.creds_path()) {
             Ok(Some(creds)) => self.go_online(creds),
@@ -377,6 +399,23 @@ impl Controller {
         ui.on_share_clipboard_changed(move |v| {
             c.0.state.lock().unwrap().settings.share_clipboard = v;
             c.save_settings();
+        });
+        let c = self.clone();
+        ui.on_allow_direct_changed(move |v| {
+            let conn = {
+                let mut st = c.0.state.lock().unwrap();
+                st.settings.allow_direct = v;
+                st.conn.clone()
+            };
+            c.save_settings();
+            if let Some(conn) = conn {
+                conn.set_allow_direct(v);
+                c.0.rt.spawn(async move {
+                    if let Err(e) = conn.announce_candidates().await {
+                        tracing::warn!("cannot update direct-connection settings: {e}");
+                    }
+                });
+            }
         });
         let c = self.clone();
         ui.on_copy_id(move || {
@@ -706,7 +745,7 @@ impl Controller {
         let mut backoff = Duration::from_secs(1);
         loop {
             match ServerConn::connect(&creds.server, Some(creds.server_fingerprint)).await {
-                Ok((conn, mut events)) => match conn.authenticate(&creds).await {
+                Ok((conn, mut events)) => match self.authenticate(&conn, &creds).await {
                     Ok(_) => {
                         backoff = Duration::from_secs(1);
                         self.0.state.lock().unwrap().conn = Some(conn.clone());
@@ -718,10 +757,10 @@ impl Controller {
                         loop {
                             tokio::select! {
                                 ev = events.recv() => match ev {
-                                    Some(Event::IncomingSession { session_id, from }) => {
+                                    Some(Event::IncomingSession { session_id, from, candidates }) => {
                                         let this = self.clone();
                                         let (conn, creds) = (conn.clone(), creds.clone());
-                                        tokio::spawn(async move { this.handle_incoming(conn, creds, session_id, from).await });
+                                        tokio::spawn(async move { this.handle_incoming(conn, creds, session_id, from, candidates).await });
                                     }
                                     Some(Event::DevicePresence { .. }) => self.refresh_devices(conn.clone(), creds.device_id),
                                     None => break,
@@ -786,9 +825,13 @@ impl Controller {
         creds: DeviceCredentials,
         session_id: SessionId,
         from: DeviceInfo,
+        candidates: Vec<std::net::SocketAddr>,
     ) {
-        let ch = match session::accept(&conn, &creds, session_id, &from).await {
-            Ok(ch) => ch,
+        let ch = match session::accept_routed(&conn, &creds, session_id, &from, &candidates).await {
+            Ok((ch, route)) => {
+                tracing::info!(?route, "incoming session channel");
+                ch
+            }
             Err(e) => {
                 tracing::warn!("incoming session handshake failed: {e}");
                 return;
@@ -974,7 +1017,11 @@ impl Controller {
         creds: DeviceCredentials,
         device_id: u64,
     ) -> somedesk_client::Result<Option<SessionEnd>> {
-        let (ch, host_info) = session::connect(&conn, &creds, device_id).await?;
+        let (ch, host_info, route) = session::connect_routed(&conn, &creds, device_id).await?;
+        let route_label = match route {
+            session::Route::Direct => "Encrypted · direct",
+            session::Route::Relay => "Encrypted · relayed",
+        };
         let peer = ch.peer.clone();
         let same_account = peer.identity_pk == creds.identity_pk;
         if let (PeerStatus::Changed { previous_identity_pk }, false) = (self.trust_status(&peer), same_account) {
@@ -1016,6 +1063,7 @@ impl Controller {
                 this.ui(move |ui| {
                     ui.set_session_peer(label.into());
                     ui.set_session_peer_letter(peer_letter.into());
+                    ui.set_session_route(route_label.into());
                     ui.set_session_peer_id(id.into());
                     ui.set_session_peer_fingerprint(fp.into());
                     ui.set_has_frame(false);

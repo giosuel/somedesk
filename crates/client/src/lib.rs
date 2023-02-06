@@ -9,6 +9,7 @@
 
 pub mod clipboard;
 pub mod credentials;
+pub mod direct;
 pub mod files;
 pub mod host;
 pub mod server;

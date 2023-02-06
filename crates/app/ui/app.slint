@@ -54,6 +54,8 @@ export component AppWindow inherits Window {
     in-out property <string> connect-id;
     in-out property <bool> auto-accept;
     in-out property <bool> share-clipboard;
+    in-out property <bool> allow-direct;
+    callback allow-direct-changed(bool);
     callback connect(string);
     callback auto-accept-changed(bool);
     callback share-clipboard-changed(bool);
@@ -85,6 +87,7 @@ export component AppWindow inherits Window {
     in property <string> session-peer;
     in property <string> session-peer-id;
     in property <string> session-peer-letter;
+    in property <string> session-route: "Encrypted";
     in property <string> session-peer-fingerprint;
     in property <image> remote-frame;
     in property <bool> has-frame;
@@ -174,6 +177,8 @@ export component AppWindow inherits Window {
         connect-id <=> root.connect-id;
         auto-accept <=> root.auto-accept;
         share-clipboard <=> root.share-clipboard;
+        allow-direct <=> root.allow-direct;
+        allow-direct-changed(v) => { root.allow-direct-changed(v); }
         hosting-active: root.hosting-active;
         hosting-peer: root.hosting-peer;
         connect(id) => { root.connect(id); }
@@ -188,6 +193,7 @@ export component AppWindow inherits Window {
         peer: root.session-peer;
         peer-id: root.session-peer-id;
         peer-letter: root.session-peer-letter;
+        route: root.session-route;
         peer-fingerprint: root.session-peer-fingerprint;
         frame: root.remote-frame;
         has-frame: root.has-frame;

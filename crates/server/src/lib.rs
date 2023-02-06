@@ -38,6 +38,8 @@ pub(crate) struct Online {
     pub conn_id: u64,
     pub user_id: i64,
     pub tx: mpsc::UnboundedSender<ServerFrame>,
+    /// Addresses peers may try for a direct connection; empty if the device only wants the relay.
+    pub candidates: Vec<SocketAddr>,
 }
 
 pub(crate) struct Shared {
