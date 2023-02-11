@@ -1,11 +1,15 @@
 //! Platform backends: screen capture, input injection and the clipboard.
 //!
-//! Backends implement [`Capturer`], [`Injector`] and [`Clipboard`]. Currently: Linux X11 and Linux
-//! Wayland (via the xdg-desktop-portal). Windows and macOS plug in behind the same traits later.
+//! Backends implement [`Capturer`], [`Injector`] and [`Clipboard`]: Linux X11, Linux Wayland (via
+//! the xdg-desktop-portal), Windows (GDI + SendInput) and macOS (CoreGraphics).
 
 pub mod clipboard;
 #[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod mac;
+#[cfg(windows)]
+pub mod win;
 
 /// One captured frame, 32-bit BGRX/BGRA.
 pub struct Frame {
@@ -14,9 +18,10 @@ pub struct Frame {
     /// Bytes per row.
     pub stride: usize,
     pub data: Vec<u8>,
-    /// Where the frame's top-left corner is in the injector's coordinates, if the frame shows only
-    /// part of the screen (one monitor). `None`: the frame is the whole screen.
-    pub origin: Option<(i32, i32)>,
+    /// The area the frame shows, in the injector's coordinates (x, y, width, height), when that
+    /// is not simply the whole screen at one pixel per unit: one monitor, or a HiDPI screen whose
+    /// pointer coordinates are in points. `None`: the frame is the whole screen.
+    pub view: Option<(i32, i32, u32, u32)>,
 }
 
 /// A monitor that can be shown on its own.
@@ -60,6 +65,16 @@ pub trait Injector: Send {
     fn scroll(&mut self, dx: i32, dy: i32) -> anyhow::Result<()>;
     /// Presses or releases the key producing X11 keysym `keysym`.
     fn key(&mut self, keysym: u32, down: bool) -> anyhow::Result<()>;
+}
+
+/// The character an X11 keysym types: Latin-1 keysyms are their code point, Unicode keysyms
+/// carry it in the low 24 bits. Used by backends that type text rather than press keys.
+pub fn keysym_char(keysym: u32) -> Option<char> {
+    match keysym {
+        0x20..=0x7e | 0xa0..=0xff => char::from_u32(keysym),
+        0x0100_0000..=0x0110_ffff => char::from_u32(keysym - 0x0100_0000),
+        _ => None,
+    }
 }
 
 pub trait Clipboard: Send {
@@ -158,9 +173,35 @@ pub fn open_screen(state_dir: Option<&std::path::Path>) -> anyhow::Result<Screen
             }
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        let _ = state_dir;
+        Ok(Screen {
+            capturer: Box::new(win::GdiCapturer::open()?),
+            injector: Box::new(win::SendInputInjector::open()?),
+            can_control: true,
+            backend: "windows-gdi",
+        })
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = state_dir;
+        mac::open_screen()
+    }
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     {
         let _ = state_dir;
         anyhow::bail!("screen sharing is not implemented on this platform yet")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn keysyms_to_characters() {
+        assert_eq!(super::keysym_char(0x61), Some('a'));
+        assert_eq!(super::keysym_char(0xe4), Some('ä'));
+        assert_eq!(super::keysym_char(0x0100_263a), Some('☺'));
+        assert_eq!(super::keysym_char(0xff0d), None);
     }
 }

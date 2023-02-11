@@ -1,5 +1,8 @@
 //! SomeDesk desktop client.
 
+// No console window next to the app in Windows release builds.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod controller;
 mod keymap;
 
@@ -19,10 +22,12 @@ struct Args {
     server: Option<String>,
 }
 
+/// Where credentials and settings live: `$XDG_DATA_HOME/somedesk` on Linux, `%APPDATA%\somedesk`
+/// on Windows, `~/Library/Application Support/somedesk` on macOS.
 fn data_dir(profile: &str) -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+        .or_else(dirs::data_dir)
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("somedesk").join(profile)
 }

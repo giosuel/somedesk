@@ -50,3 +50,7 @@ dashmap = "6"
 # Crypto (Argon2, curve25519) and video codecs are painfully slow unoptimized.
 [profile.dev.package."*"]
 opt-level = 3
+
+# See third_party/i-slint-backend-winit/PATCHED.md.
+[patch.crates-io]
+i-slint-backend-winit = { path = "third_party/i-slint-backend-winit" }

@@ -3,8 +3,8 @@
 Self-hosted remote desktop (in the spirit of AnyDesk/TeamViewer) written in Rust, with
 end-to-end encrypted sessions and zero-knowledge password login.
 
-**Status:** Linux ↔ Linux remote control works end to end through the relay, on X11 and on
-Wayland (GNOME/KDE via the desktop portal), with clipboard sharing, file transfer in both
+**Status:** remote control works end to end on Linux (X11, and Wayland via the desktop portal),
+with Windows and macOS backends written and compile-checked (see *Platforms*), with clipboard sharing, file transfer in both
 directions, a choice of which monitor to view, direct peer-to-peer connections with relay
 fallback, and password recovery.
 
@@ -92,6 +92,20 @@ target/release/somedesk --server your.server.example
 ```
 
 `--profile NAME` runs independent client instances side by side (separate credentials).
+
+## Platforms
+
+| Host platform | Capture | Input | Verified |
+|---|---|---|---|
+| Linux X11 | XGetImage, RandR monitors | XTest | end to end (tests + manual) |
+| Linux Wayland | xdg-desktop-portal + PipeWire | portal RemoteDesktop | end to end in headless GNOME |
+| Windows | GDI BitBlt, all monitors | SendInput | backend tests pass under Wine; app UI runs under Wine; networking needs real Windows (Wine lacks `IP_RECVECN`, which QUIC uses) |
+| macOS | CoreGraphics display images | CGEvent | compile-checked only |
+
+Windows builds use the MinGW toolchain (`x86_64-pc-windows-gnu`); ship `libstdc++-6.dll`,
+`libgcc_s_seh-1.dll` and `libwinpthread-1.dll` next to `somedesk.exe`. On macOS the user must allow
+*Screen Recording* (required) and *Accessibility* (for control; otherwise view-only). Neither
+covers the login screen or UAC prompts yet; that needs a system service / launch daemon.
 
 ## Linux desktops
 

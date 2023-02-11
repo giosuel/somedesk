@@ -18,5 +18,12 @@ pipewire = "0.10.1"
 tokio = { workspace = true }
 x11rb = { version = "0.13", features = ["xtest", "randr"] }
 
+[target."cfg(windows)".dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+core-graphics = { version = "0.25.0", features = ["highsierra"] }
+
 [dev-dependencies]
 tracing-subscriber.workspace = true
