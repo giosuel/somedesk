@@ -274,7 +274,7 @@ fn capture_loop(
                 continue;
             }
         };
-        *shared.view.lock().unwrap() = frame.origin.map(|(x, y)| (x, y, frame.width, frame.height));
+        *shared.view.lock().unwrap() = frame.view;
         let needs_new_encoder = encoder.as_ref().is_none_or(|e| {
             let (w, h) = e.dimensions();
             (w, h) != (frame.width & !1, frame.height & !1)

@@ -130,7 +130,7 @@ impl Capturer for FakeCapturer {
     fn capture(&mut self) -> anyhow::Result<Frame> {
         let px = *self.bgra.lock().unwrap();
         let data = px.repeat((self.width * self.height) as usize);
-        Ok(Frame { width: self.width, height: self.height, stride: self.width as usize * 4, data, origin: None })
+        Ok(Frame { width: self.width, height: self.height, stride: self.width as usize * 4, data, view: None })
     }
 }
 
@@ -236,12 +236,12 @@ impl TwoMonitorCapturer {
 
 impl Capturer for TwoMonitorCapturer {
     fn capture(&mut self) -> anyhow::Result<Frame> {
-        let (w, h, px, origin): (u32, u32, [u8; 4], _) = match self.selected {
+        let (w, h, px, view): (u32, u32, [u8; 4], _) = match self.selected {
             None => (600, 300, [0x80, 0x80, 0x80, 0xFF], None),
-            Some(Self::LEFT) => (400, 300, [0xE0, 0x40, 0x20, 0xFF], Some((0, 0))),
-            Some(_) => (200, 300, [0x20, 0x40, 0xE0, 0xFF], Some((400, 0))),
+            Some(Self::LEFT) => (400, 300, [0xE0, 0x40, 0x20, 0xFF], Some((0, 0, 400, 300))),
+            Some(_) => (200, 300, [0x20, 0x40, 0xE0, 0xFF], Some((400, 0, 200, 300))),
         };
-        Ok(Frame { width: w, height: h, stride: w as usize * 4, data: px.repeat((w * h) as usize), origin })
+        Ok(Frame { width: w, height: h, stride: w as usize * 4, data: px.repeat((w * h) as usize), view })
     }
 
     fn monitors(&mut self) -> anyhow::Result<Vec<somedesk_platform::Monitor>> {

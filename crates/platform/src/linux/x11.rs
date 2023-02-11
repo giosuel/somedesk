@@ -64,8 +64,8 @@ impl Capturer for X11Capturer {
         let (x, y, w, h) = area.unwrap_or((0, 0, geo.width, geo.height));
         let img = self.conn.get_image(ImageFormat::Z_PIXMAP, self.root, x, y, w, h, !0)?.reply().context("GetImage")?;
         let stride = img.data.len() / h.max(1) as usize;
-        let origin = area.map(|_| (x as i32, y as i32));
-        Ok(Frame { width: w as u32, height: h as u32, stride, data: img.data, origin })
+        let view = area.map(|_| (x as i32, y as i32, w as u32, h as u32));
+        Ok(Frame { width: w as u32, height: h as u32, stride, data: img.data, view })
     }
 
     fn monitors(&mut self) -> anyhow::Result<Vec<Monitor>> {
@@ -324,10 +324,10 @@ mod tests {
             assert_eq!((right.x, right.width, right.height), ((w / 2) as i32, w - w / 2, h));
             cap.select_monitor(Some(right.id)).unwrap();
             let f = cap.capture().unwrap();
-            assert_eq!((f.width, f.height, f.origin), (w - w / 2, h, Some(((w / 2) as i32, 0))));
+            assert_eq!((f.width, f.height, f.view), (w - w / 2, h, Some(((w / 2) as i32, 0, w - w / 2, h))));
             cap.select_monitor(None).unwrap();
             let f = cap.capture().unwrap();
-            assert_eq!((f.width, f.height, f.origin), (w, h, None));
+            assert_eq!((f.width, f.height, f.view), (w, h, None));
             assert!(cap.select_monitor(Some(0xDEAD)).is_err());
         }));
         let _ = xrandr(&["--delmonitor", "SD-LEFT"]);

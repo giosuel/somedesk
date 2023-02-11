@@ -187,11 +187,22 @@ fn letter(name: &str) -> String {
     name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
 }
 
+/// This computer's name, as a default device name.
 fn hostname() -> String {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .or_else(|_| std::fs::read_to_string("/etc/hostname"))
-        .map(|s| s.trim().to_owned())
-        .unwrap_or_else(|_| "my-computer".into())
+    std::env::var("COMPUTERNAME") // Windows
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .or_else(|| {
+            // macOS (and anything else with a hostname command).
+            std::process::Command::new("hostname")
+                .output()
+                .ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        })
+        .map(|s| s.trim().trim_end_matches(".local").to_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "my-computer".into())
 }
 
 /// Un-minimizes and raises the window, so an incoming request is never hidden behind other windows.
