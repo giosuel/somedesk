@@ -36,8 +36,23 @@ async fn main() -> anyhow::Result<()> {
         hex::encode_upper(server.cert_fingerprint)
     );
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
+        _ = shutdown_signal() => tracing::info!("shutting down"),
         _ = server.wait() => {}
     }
     Ok(())
+}
+
+/// Ctrl+C, or SIGTERM from systemd / container runtimes.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut term =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }

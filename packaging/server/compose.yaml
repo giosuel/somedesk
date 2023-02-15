@@ -1,0 +1,34 @@
+# Server + PostgreSQL. From the repository root:
+#   SOMEDESK_DB_PASSWORD=change-me podman compose -f packaging/server/compose.yaml up -d
+# (or `docker compose`). Clients connect to this host on UDP 21116.
+services:
+  db:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_USER: somedesk
+      POSTGRES_PASSWORD: ${SOMEDESK_DB_PASSWORD:?set SOMEDESK_DB_PASSWORD}
+      POSTGRES_DB: somedesk
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "somedesk"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+  server:
+    build:
+      context: ../..
+      dockerfile: packaging/server/Dockerfile
+    environment:
+      DATABASE_URL: postgres://somedesk:${SOMEDESK_DB_PASSWORD}@db/somedesk
+    ports:
+      - "21116:21116/udp"
+    volumes:
+      - server-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  db:
+  server-data:

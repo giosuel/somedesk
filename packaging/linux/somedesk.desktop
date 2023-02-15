@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=SomeDesk
+GenericName=Remote Desktop
+Comment=Self-hosted, end-to-end encrypted remote desktop
+Exec=somedesk
+Icon=somedesk
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=remote;desktop;support;control;
+StartupWMClass=somedesk

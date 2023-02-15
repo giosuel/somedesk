@@ -31,3 +31,31 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [build-dependencies]
 slint-build = "1.18"
+winresource = "0.1.31"
+
+# `cargo deb -p somedesk-app` builds a Debian package of the desktop client.
+[package.metadata.deb]
+name = "somedesk"
+maintainer = "giosuel <me@giosuel.ch>"
+copyright = "SomeDesk contributors"
+section = "net"
+priority = "optional"
+depends = "$auto"
+recommends = "xdg-desktop-portal, xdg-desktop-portal-gnome | xdg-desktop-portal-kde | xdg-desktop-portal-gtk, pipewire"
+suggests = "zenity"
+extended-description = """\
+Self-hosted remote desktop with end-to-end encrypted sessions. Connect to and \
+control your other computers, or let someone help you, through your own SomeDesk \
+server. Works on X11 and Wayland (through the desktop portal)."""
+assets = [
+    ["target/release/somedesk", "usr/bin/", "755"],
+    ["../../packaging/linux/somedesk.desktop", "usr/share/applications/", "644"],
+    ["../../assets/brand/app-icon.svg", "usr/share/icons/hicolor/scalable/apps/somedesk.svg", "644"],
+    ["../../assets/brand/app-icon-16.png", "usr/share/icons/hicolor/16x16/apps/somedesk.png", "644"],
+    ["../../assets/brand/app-icon-32.png", "usr/share/icons/hicolor/32x32/apps/somedesk.png", "644"],
+    ["../../assets/brand/app-icon-48.png", "usr/share/icons/hicolor/48x48/apps/somedesk.png", "644"],
+    ["../../assets/brand/app-icon-64.png", "usr/share/icons/hicolor/64x64/apps/somedesk.png", "644"],
+    ["../../assets/brand/app-icon-128.png", "usr/share/icons/hicolor/128x128/apps/somedesk.png", "644"],
+    ["../../assets/brand/app-icon-256.png", "usr/share/icons/hicolor/256x256/apps/somedesk.png", "644"],
+    ["../../assets/brand/app-icon-512.png", "usr/share/icons/hicolor/512x512/apps/somedesk.png", "644"],
+]

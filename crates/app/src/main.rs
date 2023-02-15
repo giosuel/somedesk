@@ -12,7 +12,7 @@ use std::path::PathBuf;
 slint::include_modules!();
 
 #[derive(Parser)]
-#[command(version, about = "SomeDesk remote desktop client")]
+#[command(name = "somedesk", version, about = "SomeDesk remote desktop client")]
 struct Args {
     /// Profile name; lets several independent instances run under one user account.
     #[arg(long, env = "SOMEDESK_PROFILE", default_value = "default")]
