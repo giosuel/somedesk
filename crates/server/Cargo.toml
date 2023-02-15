@@ -27,3 +27,24 @@ rustls.workspace = true
 rcgen.workspace = true
 sqlx.workspace = true
 dashmap.workspace = true
+
+# `cargo deb -p somedesk-server` builds a Debian package of the server with its systemd unit.
+[package.metadata.deb]
+name = "somedesk-server"
+maintainer = "giosuel <me@giosuel.ch>"
+copyright = "SomeDesk contributors"
+section = "net"
+priority = "optional"
+depends = "$auto, adduser"
+recommends = "postgresql"
+extended-description = """\
+Server for SomeDesk: accounts, device registry, presence and a blind relay for \
+end-to-end encrypted remote desktop sessions. Configure DATABASE_URL in \
+/etc/somedesk/server.env, then: systemctl enable --now somedesk-server"""
+maintainer-scripts = "../../packaging/server/debian"
+conf-files = ["/etc/somedesk/server.env"]
+assets = [
+    ["target/release/somedesk-server", "usr/bin/", "755"],
+    ["../../packaging/server/server.env.example", "etc/somedesk/server.env", "600"],
+]
+systemd-units = { unit-name = "somedesk-server", unit-scripts = "../../packaging/server/debian", enable = false, start = false }

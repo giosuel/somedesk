@@ -1,0 +1,34 @@
+# systemd unit for running the server directly on a host.
+#   install -m 755 somedesk-server /usr/local/bin/
+#   useradd --system --home-dir /var/lib/somedesk somedesk
+#   install -m 600 -o somedesk somedesk-server.env /etc/somedesk/server.env   # DATABASE_URL=...
+#   install -m 644 somedesk-server.service /etc/systemd/system/
+#   systemctl enable --now somedesk-server
+[Unit]
+Description=SomeDesk server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=somedesk
+EnvironmentFile=/etc/somedesk/server.env
+Environment=SOMEDESK_DATA_DIR=/var/lib/somedesk SOMEDESK_LISTEN=0.0.0.0:21116
+StateDirectory=somedesk
+ExecStart=/usr/local/bin/somedesk-server
+Restart=on-failure
+# Hardening: the server needs only its state directory and the network.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
