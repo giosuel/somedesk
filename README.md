@@ -154,6 +154,10 @@ scripts/test.sh          # everything: unit tests, X11 tests on a private Xvfb, 
 The clipboard test also needs `xsel`. Database tests need `SOMEDESK_TEST_DATABASE_URL` (an admin connection used to create throwaway
 databases; `scripts/test.sh` defaults to the local dev role). X11 tests need `Xvfb`.
 
+`.github/workflows/ci.yml` runs on GitHub Actions: formatting and clippy, the Linux suite with
+PostgreSQL and Xvfb plus the NAT test, unit tests and app builds on real Windows and macOS
+runners (uploaded as artifacts), and the `.deb` packages and server image.
+
 `scripts/nat-test.sh` (needs sudo) builds two private networks behind real Linux NATs with
 network namespaces and checks that peers connect directly behind ordinary NATs and fall back to the
 relay behind symmetric ones.
