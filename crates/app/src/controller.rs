@@ -743,16 +743,17 @@ impl Controller {
             ui.set_page(Page::Home);
         });
         let this = self.clone();
+        // Store the credentials before the task starts: it may already need them, and the UI
+        // (connecting to others, signing out) reads them from here.
+        self.0.state.lock().unwrap().creds = Some(creds.clone());
         let task = self.0.rt.spawn(async move { this.online_loop(creds).await });
         let mut st = self.0.state.lock().unwrap();
-        st.creds = None;
         if let Some(old) = st.online_task.replace(task) {
             old.abort();
         }
     }
 
     async fn online_loop(self, creds: DeviceCredentials) {
-        self.0.state.lock().unwrap().creds = Some(creds.clone());
         let mut backoff = Duration::from_secs(1);
         loop {
             match ServerConn::connect(&creds.server, Some(creds.server_fingerprint)).await {
