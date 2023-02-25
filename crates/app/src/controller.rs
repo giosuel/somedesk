@@ -366,6 +366,7 @@ impl Controller {
             st.trust = Some(trust);
         }
         self.publish_contacts();
+        self.publish_recents();
         self.ui(move |ui| {
             ui.set_login_server(server.into());
             ui.set_login_device_name(hostname().into());
