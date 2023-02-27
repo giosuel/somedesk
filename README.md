@@ -8,6 +8,22 @@ with Windows and macOS backends written and compile-checked (see *Platforms*), w
 directions, a choice of which monitor to view, direct peer-to-peer connections with relay
 fallback, and password recovery.
 
+![SomeDesk: a remote session](docs/media/session.webp)
+
+▶ [Watch a 25-second demo](docs/media/somedesk-demo.mp4): connecting, remote control,
+monitors and file transfer.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Home](docs/media/home.webp) | ![Incoming request](docs/media/incoming.webp) |
+| **Home:** this computer's ID and identity fingerprint | **Incoming request:** the host sees who is calling and their fingerprint |
+| ![File offer](docs/media/file-offer.webp) | ![Identity changed](docs/media/identity-changed.webp) |
+| **Files both ways:** files from the host are only saved once accepted | **Identity changed:** SomeDesk stops and warns if a contact's key changes |
+| ![Contacts](docs/media/contacts.webp) | ![Create an account](docs/media/sign-up.webp) |
+| **Contacts:** remembered identities and unattended access | **Sign-up:** the password never leaves the computer |
+
 ## Architecture
 
 ```
