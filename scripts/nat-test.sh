@@ -17,7 +17,9 @@ DB_URL="${ADMIN_URL%/*}/somedesk_nat"
 ME="$(id -un)"
 WORK="$(mktemp -d)"
 
-cargo build -q -p somedesk-server -p somedesk-e2e-tests --example nat_peer
+# Two builds: with --example, cargo would build only the example and skip the server binary.
+cargo build -q -p somedesk-server
+cargo build -q -p somedesk-e2e-tests --example nat_peer
 PEER="$PWD/target/debug/examples/nat_peer"
 
 cleanup() {
