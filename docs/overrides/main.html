@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+
+{#- Pages with `landing: true` render only their own content: no automatic title or edit button. -#}
+{% block content %}
+  {% if page.meta and page.meta.landing %}
+    <div class="sd-landing">{{ page.content }}</div>
+  {% else %}
+    {{ super() }}
+  {% endif %}
+{% endblock %}

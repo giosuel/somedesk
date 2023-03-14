@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-labelledby="t d">
+  <title id="t">Direct connection with relay fallback</title>
+  <desc id="d">Both devices send short-lived punch packets that open their own NAT, then dial each other. Once a direct path works, the session runs over it; otherwise it uses the relay on the server.</desc>
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b4f5e4"/>
+      <stop offset=".5" stop-color="#7dd3c0"/>
+      <stop offset="1" stop-color="#3fa2c4"/>
+    </linearGradient>
+    <!-- In user space: a bounding-box gradient has no height on a horizontal line. -->
+    <linearGradient id="line" x1="262" y1="0" x2="698" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b4f5e4"/>
+      <stop offset=".5" stop-color="#7dd3c0"/>
+      <stop offset="1" stop-color="#3fa2c4"/>
+    </linearGradient>
+  </defs>
+  <style>
+    text { font-family: Geist, Inter, "Segoe UI", system-ui, sans-serif; }
+    /* One 7 s cycle: punch (0–20%), dial (20–34%), direct session (34–92%), reset. */
+    .punch { opacity: 0; animation: punch 7s ease-out infinite; }
+    .punch.l { offset-path: path("M262 190 L340 190"); }
+    .punch.r { offset-path: path("M698 190 L620 190"); }
+    .punch.b { animation-delay: .25s; }
+    @keyframes punch {
+      0% { offset-distance: 0%; opacity: 0; }
+      2% { opacity: 1; }
+      14% { offset-distance: 100%; opacity: 0; }
+      100% { offset-distance: 100%; opacity: 0; }
+    }
+    .dial { opacity: 0; animation: dial 7s linear infinite; }
+    .dial.l { offset-path: path("M262 190 L698 190"); }
+    .dial.r { offset-path: path("M698 190 L262 190"); }
+    @keyframes dial {
+      0%, 20% { offset-distance: 0%; opacity: 0; }
+      21% { opacity: 1; }
+      33% { offset-distance: 100%; opacity: 1; }
+      34%, 100% { offset-distance: 100%; opacity: 0; }
+    }
+    .direct { stroke-dasharray: 440; stroke-dashoffset: 440; animation: draw 7s ease-in-out infinite; }
+    @keyframes draw { 0%, 30% { stroke-dashoffset: 440; opacity: 1; } 38%, 90% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0; } }
+    .data { opacity: 0; animation: data 1.4s linear infinite; }
+    .data.l { offset-path: path("M262 190 L698 190"); }
+    .data.r { offset-path: path("M698 190 L262 190"); }
+    .data.d2 { animation-delay: .7s; }
+    @keyframes data { 0% { offset-distance: 0%; opacity: 0; } 15%, 85% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+    .session { opacity: 0; animation: session 7s steps(1) infinite; }
+    @keyframes session { 0% { opacity: 0; } 38% { opacity: 1; } 90% { opacity: 0; } }
+    .relay { stroke-dasharray: 4 7; animation: flow 1.2s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -22; } }
+    .badge { opacity: 0; animation: session 7s steps(1) infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .punch, .dial, .data, .relay { animation: none; opacity: 0; }
+      .direct { animation: none; stroke-dashoffset: 0; }
+      .session, .badge { animation: none; opacity: 1; }
+    }
+  </style>
+
+  <!-- Relay path through the server: always available as the fallback. -->
+  <path class="relay" d="M262 178 C310 92 380 62 420 62" fill="none" stroke="#3a4049" stroke-width="2"/>
+  <path class="relay" d="M540 62 C580 62 650 92 698 178" fill="none" stroke="#3a4049" stroke-width="2"/>
+  <rect x="420" y="40" width="120" height="44" rx="12" fill="#14161b" stroke="#2a2e36"/>
+  <text x="480" y="60" font-size="13.5" font-weight="600" fill="#d9dde3" text-anchor="middle">Server</text>
+  <text x="480" y="75" font-size="11" fill="#8a919c" text-anchor="middle">relay fallback</text>
+
+  <!-- Direct path. -->
+  <path d="M262 190 H698" stroke="#22252c" stroke-width="6" stroke-linecap="round"/>
+  <path class="direct" d="M262 190 H698" stroke="url(#line)" stroke-width="3" stroke-linecap="round"/>
+  <g class="session">
+    <rect class="data l" x="-9" y="-3.5" width="18" height="7" rx="3.5" fill="#3fa2c4"/>
+    <rect class="data r" x="-11" y="-3.5" width="22" height="7" rx="3.5" fill="#b4f5e4"/>
+    <rect class="data r d2" x="-11" y="-3.5" width="22" height="7" rx="3.5" fill="#b4f5e4"/>
+  </g>
+  <circle class="punch l" r="4" fill="#7dd3c0"/>
+  <circle class="punch l b" r="4" fill="#7dd3c0"/>
+  <circle class="punch r" r="4" fill="#7dd3c0"/>
+  <circle class="punch r b" r="4" fill="#7dd3c0"/>
+  <circle class="dial l" r="5" fill="#b4f5e4"/>
+  <circle class="dial r" r="5" fill="#3fa2c4"/>
+  <g class="badge">
+    <rect x="404" y="210" width="152" height="26" rx="13" fill="#14161b" stroke="#2a2e36"/>
+    <circle cx="420" cy="223" r="4" fill="#7dd3c0"/>
+    <text x="430" y="227.5" font-size="12" font-weight="600" fill="#d9dde3">Direct · encrypted</text>
+  </g>
+  <text x="301" y="214" font-size="11" fill="#8a919c" text-anchor="middle">punch</text>
+  <text x="659" y="214" font-size="11" fill="#8a919c" text-anchor="middle">punch</text>
+
+  <!-- Viewer and its NAT. -->
+  <rect x="40" y="160" width="120" height="60" rx="12" fill="#16181d" stroke="#2a2e36"/>
+  <text x="100" y="186" font-size="13.5" font-weight="600" fill="#d9dde3" text-anchor="middle">Viewer</text>
+  <text x="100" y="203" font-size="11" fill="#8a919c" text-anchor="middle">alice-laptop</text>
+  <path d="M160 190 H200" stroke="#2a2e36" stroke-width="2"/>
+  <rect x="200" y="168" width="62" height="44" rx="10" fill="#111317" stroke="#3a4049" stroke-dasharray="3 3"/>
+  <text x="231" y="194" font-size="12" font-weight="600" fill="#8a919c" text-anchor="middle">NAT</text>
+
+  <!-- Host and its NAT. -->
+  <rect x="800" y="160" width="120" height="60" rx="12" fill="#16181d" stroke="#2a2e36"/>
+  <text x="860" y="186" font-size="13.5" font-weight="600" fill="#d9dde3" text-anchor="middle">Host</text>
+  <text x="860" y="203" font-size="11" fill="#8a919c" text-anchor="middle">bob-desktop</text>
+  <path d="M760 190 H800" stroke="#2a2e36" stroke-width="2"/>
+  <rect x="698" y="168" width="62" height="44" rx="10" fill="#111317" stroke="#3a4049" stroke-dasharray="3 3"/>
+  <text x="729" y="194" font-size="12" font-weight="600" fill="#8a919c" text-anchor="middle">NAT</text>
+</svg>

@@ -4,13 +4,15 @@ SomeDesk is a Rust workspace: a server, a desktop client, and the libraries they
 
 ## Overview
 
+```mermaid
+flowchart LR
+    V["Viewer<br/>decode · input"] <-- "Noise (end to end)" --> H["Host<br/>capture · encode · inject"]
+    V -. "QUIC" .-> S[("Server<br/>accounts · presence · relay")]
+    H -. "QUIC" .-> S
 ```
- viewer (Slint UI)                                     host (Slint UI)
- decode ← Noise ←─┐                               ┌─→ Noise → capture/encode
- input  → Noise →─┤  QUIC        server    QUIC   ├─← Noise ← inject (XTest / portal)
-                  └──────→ blind relay ←──────────┘
-                           accounts · devices · presence (PostgreSQL)
-```
+
+The server keeps accounts and devices in PostgreSQL, tracks who is online and relays sessions
+that can't go direct. It never holds a key that could open a session.
 
 | Crate | Purpose |
 |---|---|
@@ -22,3 +24,14 @@ SomeDesk is a Rust workspace: a server, a desktop client, and the libraries they
 | `platform` | Screen capture, input injection and clipboard (Linux: X11, and Wayland via the desktop portal + PipeWire) |
 | `app` | Desktop client (Slint); fonts: Geist / Geist Mono (OFL) |
 | `e2e-tests` | Integration tests: real server + PostgreSQL + relay + clients |
+
+## Direct or relayed
+
+![Both devices punch through their NATs and connect directly; the relay is the fallback](assets/route.svg)
+
+When a session starts, the server tells each device where the other can be reached. Both send
+a few short-lived packets towards the other, which open their own NAT, and then dial each other
+over QUIC. The first direct path to carry the viewer's handshake wins. If none works within 2.5
+seconds, the session goes through the server's relay. Either way it's the same Noise session,
+so the relay only forwards ciphertext. The [Security model](security.md)
+covers the details, including how to turn direct connections off.
