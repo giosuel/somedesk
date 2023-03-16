@@ -23,13 +23,17 @@ cargo test --workspace "$@" -- --test-threads=1
 # Wayland: a headless GNOME session with the desktop portal, if GNOME is installed.
 if command -v gnome-shell >/dev/null && [ -x /usr/libexec/xdg-desktop-portal-gnome ]; then
     export WL_DIR="/tmp/somedesk-wayland-test-$$"
-    trap 'kill $XVFB_PID 2>/dev/null || true; scripts/wayland-env.sh stop >/dev/null 2>&1 || true; rm -rf "$WL_DIR"' EXIT
+    # The document portal mounts run/doc and may still hold it while the session stops.
+    trap 'kill $XVFB_PID 2>/dev/null || true; scripts/wayland-env.sh stop >/dev/null 2>&1 || true
+          fusermount3 -u "$WL_DIR/run/doc" 2>/dev/null || fusermount -u "$WL_DIR/run/doc" 2>/dev/null || true
+          rm -rf "$WL_DIR" 2>/dev/null || true' EXIT
     scripts/wayland-env.sh start >/dev/null
     state=$(scripts/wayland-grant.sh)
     (
         . "$WL_DIR/env"
         unset SOMEDESK_TEST_DISPLAY
-        SOMEDESK_TEST_WAYLAND_STATE="$state" cargo test -p somedesk-e2e-tests --test session wayland "$@"
+        # --workspace: the same dependency features as above, so nothing is rebuilt.
+        SOMEDESK_TEST_WAYLAND_STATE="$state" cargo test --workspace --test session wayland "$@"
     )
 else
     echo "gnome-shell / xdg-desktop-portal-gnome not installed: skipping the Wayland test"
