@@ -11,13 +11,25 @@ Download the package for your system from the
 
 === "Linux"
 
+    **Any distribution:** the AppImage runs without installing. It needs glibc 2.35 or newer
+    (for example Ubuntu 22.04 or Debian 12 and later) and PipeWire, which current desktops include.
+
+    ```sh
+    chmod +x SomeDesk-*-x86_64.AppImage
+    ./SomeDesk-*-x86_64.AppImage
+    ```
+
+    If it doesn't start because FUSE is missing (as in some containers), run it with
+    `--appimage-extract-and-run`.
+
+    **Debian and Ubuntu:** the `.deb` adds SomeDesk to your application menu.
+
     ```sh
     sudo apt install ./somedesk-app_*.deb
     ```
 
-    SomeDesk then appears in your application menu. On X11 it works out of the box. On Wayland,
-    the desktop asks for permission the first time someone connects: choose **Share** and switch
-    on **Allow Remote Interaction**. See [Linux desktops](platforms.md#linux-desktops).
+    On X11 it works out of the box. On Wayland, the desktop asks for permission the first time
+    someone connects: choose **Share** and switch on **Allow Remote Interaction**. See [Linux desktops](platforms.md#linux-desktops).
 
 === "Windows"
 
