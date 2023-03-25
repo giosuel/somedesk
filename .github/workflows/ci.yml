@@ -31,6 +31,29 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # The Android app: lints the code that only exists there (the APK is built on release).
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Android SDK packages and cargo-ndk
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install "platforms;android-35" "ndk;28.2.13676358" >/dev/null
+          cargo install cargo-ndk@4.1.2 --locked
+      - name: Clippy
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" ANDROID_JAR="$ANDROID_HOME/platforms/android-35/android.jar"
+          cargo ndk -t arm64-v8a -P 26 clippy --locked -p somedesk-android -- -D warnings
+
   test-linux:
     runs-on: ubuntu-24.04
     services:

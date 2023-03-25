@@ -85,6 +85,46 @@ jobs:
           name: appimage
           path: target/dist/*.AppImage
 
+  android:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Android SDK packages and cargo-ndk
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install "platforms;android-35" "build-tools;35.0.0" "ndk;28.2.13676358" >/dev/null
+          cargo install cargo-ndk@4.1.2 --locked
+      # Releases are signed with the app's own key, so phones accept them as updates. Add it as
+      # the secrets ANDROID_KEYSTORE_BASE64 (base64 of the keystore file, key alias "somedesk")
+      # and ANDROID_KEYSTORE_PASSWORD. Dry runs without it use a throwaway debug key.
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "SOMEDESK_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "::error::the ANDROID_KEYSTORE_BASE64 secret is not set, so the APK cannot be signed for release"
+            exit 1
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set: this dry run signs the APK with a throwaway key"
+          fi
+      - name: Build the APK
+        env:
+          SOMEDESK_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" packaging/android/build-apk.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: target/dist/*.apk
+
   windows:
     needs: version
     runs-on: windows-latest
@@ -155,7 +195,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [version, linux, appimage, windows, macos, image]
+    needs: [version, linux, appimage, android, windows, macos, image]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
