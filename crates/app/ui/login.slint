@@ -8,6 +8,133 @@ component Point inherits HorizontalLayout {
     Text { text: root.text; color: Theme.text-2; font-size: 14px; vertical-alignment: center; }
 }
 
+/// The sign-in, create-account and reset-password form.
+export component LoginForm inherits VerticalLayout {
+    in property <string> error;
+    in property <bool> busy;
+    in-out property <string> server;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <string> password2;
+    in-out property <string> device-name;
+    in-out property <bool> create-mode;
+    /// "Forgot password": reset the password with the recovery key.
+    in-out property <bool> recover-mode;
+    in-out property <string> recovery-key;
+    callback submit();
+    in property <string> device-label: "Name of this computer";
+    in property <string> device-placeholder: "e.g. office-pc";
+    spacing: root.recover-mode ? 14px : 18px;
+
+    if root.recover-mode: HorizontalLayout {
+        alignment: start;
+        spacing: 6px;
+        Icon { y: (parent.height - self.height) / 2; d: Icons.arrow-left; size: 15px; color: Theme.accent; }
+        LinkText { text: "Back to sign in"; clicked => { root.recover-mode = false; } }
+    }
+    VerticalLayout {
+        spacing: 6px;
+        Text {
+            text: root.recover-mode ? "Reset your password" : root.create-mode ? "Create an account" : "Sign in";
+            color: Theme.text;
+            font-size: 24px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+        if root.recover-mode: Text {
+            text: "Use the recovery key you saved when you created your account.";
+            color: Theme.muted;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        if !root.recover-mode: HorizontalLayout {
+            alignment: start;
+            spacing: 5px;
+            Text {
+                text: root.create-mode ? "Already have an account?" : "New here?";
+                color: Theme.muted;
+                font-size: 14px;
+            }
+            LinkText {
+                text: root.create-mode ? "Sign in" : "Create an account";
+                font-size: 14px;
+                clicked => { root.create-mode = !root.create-mode; }
+            }
+        }
+    }
+
+    Field { label: "Server"; placeholder: "desk.example.com"; text <=> root.server; enabled: !root.busy; }
+    Field { label: "Username"; placeholder: "your-name"; text <=> root.username; enabled: !root.busy; }
+    if root.recover-mode: Field {
+        label: "Recovery key";
+        placeholder: "XXXX-XXXX-XXXX-…";
+        font-family: Theme.mono;
+        font-size: 14px;
+        text <=> root.recovery-key;
+        enabled: !root.busy;
+    }
+    if !root.recover-mode: VerticalLayout {
+        spacing: 7px;
+        HorizontalLayout {
+            Text { text: "Password"; color: Theme.muted; font-size: 13px; }
+            Rectangle { horizontal-stretch: 1; }
+            if !root.create-mode: LinkText { text: "Forgot?"; clicked => { root.recover-mode = true; } }
+        }
+        Field {
+            placeholder: root.create-mode ? "At least 8 characters" : "Your password";
+            password: true;
+            text <=> root.password;
+            enabled: !root.busy;
+            accepted => { if (!root.create-mode) { root.submit(); } }
+        }
+    }
+    if root.create-mode && !root.recover-mode: Field {
+        label: "Confirm password";
+        placeholder: "Repeat your password";
+        password: true;
+        text <=> root.password2;
+        enabled: !root.busy;
+    }
+    if root.recover-mode: HorizontalLayout {
+        spacing: 12px;
+        Field {
+            width: (parent.width - 12px) / 2;
+            label: "New password";
+            placeholder: "At least 8 characters";
+            password: true;
+            text <=> root.password;
+            enabled: !root.busy;
+        }
+        Field {
+            width: (parent.width - 12px) / 2;
+            label: "Confirm";
+            placeholder: "Repeat it";
+            password: true;
+            text <=> root.password2;
+            enabled: !root.busy;
+        }
+    }
+    Field { label: root.device-label; placeholder: root.device-placeholder; text <=> root.device-name; enabled: !root.busy; }
+
+    if root.error != "": Rectangle {
+        background: Theme.danger-soft;
+        border-radius: 11px;
+        HorizontalLayout {
+            padding: 12px;
+            spacing: 10px;
+            Icon { y: 1px; d: Icons.warning; size: 16px; color: Theme.danger-text; }
+            Text { text: root.error; color: Theme.danger-text; font-size: 13px; wrap: word-wrap; }
+        }
+    }
+    PrimaryButton {
+        horizontal-stretch: 1;
+        height: 46px;
+        text: root.recover-mode ? "Reset password" : root.create-mode ? "Create account" : "Sign in";
+        busy: root.busy;
+        clicked => { root.submit(); }
+    }
+}
+
 export component LoginPage inherits Rectangle {
     in property <string> error;
     in property <bool> busy;
@@ -51,7 +178,7 @@ export component LoginPage inherits Rectangle {
                 spacing: 14px;
                 Point { text: "The relay only ever sees ciphertext"; }
                 Point { text: "Zero-knowledge sign-in with a recovery key"; }
-                Point { text: "For Linux, Windows and macOS"; }
+                Point { text: "For Linux, Windows, macOS and Android"; }
             }
             Rectangle { vertical-stretch: 1; }
             Text { text: "Self-hosted · open protocol"; color: Theme.subtle; font-size: 12px; }
@@ -62,119 +189,21 @@ export component LoginPage inherits Rectangle {
             width: 500px;
             background: #121418;
             Rectangle { x: 0; width: 1px; background: #1f2228; }
-            VerticalLayout {
+            LoginForm {
                 alignment: center;
                 padding-left: 60px;
                 padding-right: 60px;
-                spacing: root.recover-mode ? 14px : 18px;
-
-                if root.recover-mode: HorizontalLayout {
-                    alignment: start;
-                    spacing: 6px;
-                    Icon { y: (parent.height - self.height) / 2; d: Icons.arrow-left; size: 15px; color: Theme.accent; }
-                    LinkText { text: "Back to sign in"; clicked => { root.recover-mode = false; } }
-                }
-                VerticalLayout {
-                    spacing: 6px;
-                    Text {
-                        text: root.recover-mode ? "Reset your password" : root.create-mode ? "Create an account" : "Sign in";
-                        color: Theme.text;
-                        font-size: 24px;
-                        font-weight: 600;
-                        letter-spacing: -0.5px;
-                    }
-                    if root.recover-mode: Text {
-                        text: "Use the recovery key you saved when you created your account.";
-                        color: Theme.muted;
-                        font-size: 14px;
-                        wrap: word-wrap;
-                    }
-                    if !root.recover-mode: HorizontalLayout {
-                        alignment: start;
-                        spacing: 5px;
-                        Text {
-                            text: root.create-mode ? "Already have an account?" : "New here?";
-                            color: Theme.muted;
-                            font-size: 14px;
-                        }
-                        LinkText {
-                            text: root.create-mode ? "Sign in" : "Create an account";
-                            font-size: 14px;
-                            clicked => { root.create-mode = !root.create-mode; }
-                        }
-                    }
-                }
-
-                Field { label: "Server"; placeholder: "desk.example.com"; text <=> root.server; enabled: !root.busy; }
-                Field { label: "Username"; placeholder: "your-name"; text <=> root.username; enabled: !root.busy; }
-                if root.recover-mode: Field {
-                    label: "Recovery key";
-                    placeholder: "XXXX-XXXX-XXXX-…";
-                    font-family: Theme.mono;
-                    font-size: 14px;
-                    text <=> root.recovery-key;
-                    enabled: !root.busy;
-                }
-                if !root.recover-mode: VerticalLayout {
-                    spacing: 7px;
-                    HorizontalLayout {
-                        Text { text: "Password"; color: Theme.muted; font-size: 13px; }
-                        Rectangle { horizontal-stretch: 1; }
-                        if !root.create-mode: LinkText { text: "Forgot?"; clicked => { root.recover-mode = true; } }
-                    }
-                    Field {
-                        placeholder: root.create-mode ? "At least 8 characters" : "Your password";
-                        password: true;
-                        text <=> root.password;
-                        enabled: !root.busy;
-                        accepted => { if (!root.create-mode) { root.submit(); } }
-                    }
-                }
-                if root.create-mode && !root.recover-mode: Field {
-                    label: "Confirm password";
-                    placeholder: "Repeat your password";
-                    password: true;
-                    text <=> root.password2;
-                    enabled: !root.busy;
-                }
-                if root.recover-mode: HorizontalLayout {
-                    spacing: 12px;
-                    Field {
-                        width: (parent.width - 12px) / 2;
-                        label: "New password";
-                        placeholder: "At least 8 characters";
-                        password: true;
-                        text <=> root.password;
-                        enabled: !root.busy;
-                    }
-                    Field {
-                        width: (parent.width - 12px) / 2;
-                        label: "Confirm";
-                        placeholder: "Repeat it";
-                        password: true;
-                        text <=> root.password2;
-                        enabled: !root.busy;
-                    }
-                }
-                Field { label: "Name of this computer"; placeholder: "e.g. office-pc"; text <=> root.device-name; enabled: !root.busy; }
-
-                if root.error != "": Rectangle {
-                    background: Theme.danger-soft;
-                    border-radius: 11px;
-                    HorizontalLayout {
-                        padding: 12px;
-                        spacing: 10px;
-                        Icon { y: 1px; d: Icons.warning; size: 16px; color: Theme.danger-text; }
-                        Text { text: root.error; color: Theme.danger-text; font-size: 13px; wrap: word-wrap; }
-                    }
-                }
-                PrimaryButton {
-                    horizontal-stretch: 1;
-                    height: 46px;
-                    text: root.recover-mode ? "Reset password" : root.create-mode ? "Create account" : "Sign in";
-                    busy: root.busy;
-                    clicked => { root.submit(); }
-                }
+                server <=> root.server;
+                username <=> root.username;
+                password <=> root.password;
+                password2 <=> root.password2;
+                device-name <=> root.device-name;
+                create-mode <=> root.create-mode;
+                recover-mode <=> root.recover-mode;
+                recovery-key <=> root.recovery-key;
+                error: root.error;
+                busy: root.busy;
+                submit => { root.submit(); }
             }
         }
     }

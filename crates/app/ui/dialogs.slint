@@ -60,7 +60,7 @@ export component IncomingDialog inherits Backdrop {
     in property <string> note;
     callback answer(bool);
     Sheet {
-        sheet-width: 480px;
+        sheet-width: Math.min(480px, root.width - 32px);
         outline: root.trust == TrustLevel.changed ? #5a2a2e : Theme.border-strong;
         HorizontalLayout {
             spacing: 14px;
@@ -151,7 +151,7 @@ export component OutgoingDialog inherits Backdrop {
     in property <string> target;
     callback cancel();
     Sheet {
-        sheet-width: 400px;
+        sheet-width: Math.min(400px, root.width - 32px);
         HorizontalLayout {
             alignment: center;
             Rectangle {
@@ -184,8 +184,9 @@ export component OutgoingDialog inherits Backdrop {
 export component Toast inherits Rectangle {
     in property <string> text;
     in property <bool> error;
-    height: 44px;
-    width: row.preferred-width + 32px;
+    in property <length> limit-width: 10000px;
+    height: Math.max(44px, row.preferred-height + 24px);
+    width: Math.min(row.preferred-width, root.limit-width);
     border-radius: 12px;
     background: Theme.raised;
     border-width: 1px;
@@ -195,6 +196,8 @@ export component Toast inherits Rectangle {
     drop-shadow-offset-y: 8px;
     row := HorizontalLayout {
         alignment: center;
+        padding-left: 16px;
+        padding-right: 16px;
         spacing: 10px;
         Rectangle {
             y: (parent.height - 8px) / 2;
@@ -203,7 +206,7 @@ export component Toast inherits Rectangle {
             border-radius: 4px;
             background: root.error ? Theme.danger : Theme.accent;
         }
-        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; wrap: word-wrap; }
     }
 }
 
@@ -218,7 +221,7 @@ export component RecoveryKeyDialog inherits Backdrop {
     callback done();
     property <bool> saved;
     Sheet {
-        sheet-width: 480px;
+        sheet-width: Math.min(480px, root.width - 32px);
         HorizontalLayout {
             spacing: 14px;
             Rectangle {
@@ -391,7 +394,7 @@ export component FileOfferDialog inherits Backdrop {
     in property <string> size;
     callback answer(bool);
     Sheet {
-        sheet-width: 420px;
+        sheet-width: Math.min(420px, root.width - 32px);
         HorizontalLayout {
             spacing: 14px;
             Rectangle {
@@ -446,7 +449,7 @@ export component IdentityChangedDialog inherits Backdrop {
     in property <string> previous-fingerprint;
     callback answer(bool);
     Sheet {
-        sheet-width: 460px;
+        sheet-width: Math.min(460px, root.width - 32px);
         outline: #5a2a2e;
         HorizontalLayout {
             spacing: 14px;

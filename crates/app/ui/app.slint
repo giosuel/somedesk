@@ -4,6 +4,7 @@ import { HomePage, DeviceItem, ContactItem, RecentItem } from "home.slint";
 import { SessionPage, MonitorChoice } from "session.slint";
 import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
+import { MobileLoginPage, MobileHomePage, MobileSessionPage } from "mobile.slint";
 
 export { DeviceItem, TransferItem, ContactItem, TrustLevel, MonitorChoice, RecentItem }
 
@@ -11,10 +12,12 @@ export enum Page { starting, login, home, session }
 
 export component AppWindow inherits Window {
     title: "SomeDesk";
-    preferred-width: 1180px;
-    preferred-height: 760px;
-    min-width: 960px;
-    min-height: 640px;
+    /// Phone layout (Android): one column, bottom navigation, touch controls in sessions.
+    in property <bool> mobile;
+    preferred-width: root.mobile ? 412px : 1180px;
+    preferred-height: root.mobile ? 860px : 760px;
+    min-width: root.mobile ? 0px : 960px;
+    min-height: root.mobile ? 0px : 640px;
     default-font-family: "Geist";
     icon: @image-url("../../../assets/brand/app-icon-256.png");
     background: Theme.bg;
@@ -103,6 +106,9 @@ export component AppWindow inherits Window {
     callback pointer-button(int, bool);
     callback scroll(length, length);
     callback key(string, bool);
+    in-out property <string> session-soft-text;
+    callback soft-input(string, bool, bool);
+    callback soft-key(string, bool, bool);
 
     // Recovery key
     in property <bool> recovery-key-visible;
@@ -134,6 +140,13 @@ export component AppWindow inherits Window {
     in property <string> toast-text;
     in property <bool> toast-error;
 
+    // Phone layout: pages stay clear of the system bars and the soft keyboard.
+    property <length> keyboard-height: root.virtual-keyboard-size.height > 0 ? Math.max(0px, root.height - root.virtual-keyboard-position.y) : 0px;
+    property <length> inset-top: root.mobile ? root.safe-area-insets.top : 0px;
+    property <length> inset-bottom: root.mobile ? Math.max(root.safe-area-insets.bottom, root.keyboard-height) : 0px;
+    property <length> inset-left: root.mobile ? root.safe-area-insets.left : 0px;
+    property <length> inset-right: root.mobile ? root.safe-area-insets.right : 0px;
+
     if root.page == Page.starting: Rectangle {
         VerticalLayout {
             alignment: center;
@@ -143,7 +156,7 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.page == Page.login: LoginPage {
+    if root.page == Page.login && !root.mobile: LoginPage {
         server <=> root.login-server;
         username <=> root.login-username;
         password <=> root.login-password;
@@ -157,7 +170,7 @@ export component AppWindow inherits Window {
         submit => { root.login-submit(); }
     }
 
-    if root.page == Page.home: HomePage {
+    if root.page == Page.home && !root.mobile: HomePage {
         my-id: root.my-id;
         my-device-name: root.my-device-name;
         username: root.username;
@@ -189,7 +202,7 @@ export component AppWindow inherits Window {
         send-files => { root.send-files(); }
     }
 
-    if root.page == Page.session: SessionPage {
+    if root.page == Page.session && !root.mobile: SessionPage {
         peer: root.session-peer;
         peer-id: root.session-peer-id;
         peer-letter: root.session-peer-letter;
@@ -212,6 +225,80 @@ export component AppWindow inherits Window {
         key(t, d) => { root.key(t, d); }
     }
 
+    if root.page == Page.login && root.mobile: MobileLoginPage {
+        x: root.inset-left;
+        y: root.inset-top;
+        width: root.width - root.inset-left - root.inset-right;
+        height: root.height - root.inset-top - root.inset-bottom;
+        server <=> root.login-server;
+        username <=> root.login-username;
+        password <=> root.login-password;
+        password2 <=> root.login-password2;
+        device-name <=> root.login-device-name;
+        create-mode <=> root.login-create-mode;
+        recover-mode <=> root.login-recover-mode;
+        recovery-key <=> root.login-recovery-key;
+        error: root.login-error;
+        busy: root.login-busy;
+        submit => { root.login-submit(); }
+    }
+
+    if root.page == Page.home && root.mobile: MobileHomePage {
+        x: root.inset-left;
+        y: root.inset-top;
+        width: root.width - root.inset-left - root.inset-right;
+        height: root.height - root.inset-top - root.inset-bottom;
+        my-id: root.my-id;
+        my-device-name: root.my-device-name;
+        username: root.username;
+        user-letter: root.user-letter;
+        fingerprint: root.fingerprint;
+        server-label: root.server-label;
+        online: root.online;
+        status-text: root.status-text;
+        devices: root.devices;
+        greeting: root.greeting;
+        recents: root.recents;
+        contacts: root.contacts;
+        revoke-contact(u) => { root.revoke-contact(u); }
+        forget-contact(u) => { root.forget-contact(u); }
+        connect-busy: root.connect-busy;
+        connect-id <=> root.connect-id;
+        share-clipboard <=> root.share-clipboard;
+        allow-direct <=> root.allow-direct;
+        allow-direct-changed(v) => { root.allow-direct-changed(v); }
+        connect(id) => { root.connect(id); }
+        share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
+        sign-out => { root.sign-out(); }
+        keyboard-open: root.keyboard-height > 0;
+    }
+
+    if root.page == Page.session && root.mobile: MobileSessionPage {
+        x: root.inset-left;
+        y: root.inset-top;
+        width: root.width - root.inset-left - root.inset-right;
+        height: root.height - root.inset-top - root.inset-bottom;
+        peer: root.session-peer;
+        peer-letter: root.session-peer-letter;
+        route: root.session-route;
+        frame: root.remote-frame;
+        has-frame: root.has-frame;
+        latency: root.latency;
+        fps: root.fps;
+        view-only: root.session-view-only;
+        monitors: root.session-monitors;
+        monitor-selected: root.session-monitor-selected;
+        select-monitor(id) => { root.select-monitor(id); }
+        disconnect => { root.disconnect(); }
+        pointer-moved(x, y, w, h) => { root.pointer-moved(x, y, w, h); }
+        pointer-button(b, d) => { root.pointer-button(b, d); }
+        scroll(dx, dy) => { root.scroll(dx, dy); }
+        key(t, d) => { root.key(t, d); }
+        soft-text <=> root.session-soft-text;
+        soft-input(t, c, a) => { root.soft-input(t, c, a); }
+        soft-key(t, c, a) => { root.soft-key(t, c, a); }
+    }
+
     if root.outgoing-visible: OutgoingDialog {
         target: root.outgoing-target;
         cancel => { root.outgoing-cancel(); }
@@ -219,8 +306,9 @@ export component AppWindow inherits Window {
 
 
     if root.transfers.length > 0 && (root.page == Page.session || root.page == Page.home): TransfersPanel {
-        x: parent.width - self.width - 20px;
-        y: parent.height - self.height - 20px;
+        width: root.mobile ? Math.min(330px, root.width - 24px) : 330px;
+        x: root.mobile ? (parent.width - self.width) / 2 : parent.width - self.width - 20px;
+        y: root.mobile ? parent.height - self.height - root.inset-bottom - 76px : parent.height - self.height - 20px;
         items: root.transfers;
         cancel(id, up) => { root.cancel-transfer(id, up); }
         clear => { root.clear-transfers(); }
@@ -262,10 +350,12 @@ export component AppWindow inherits Window {
     }
 
     if root.toast-text != "": Toast {
-        // Keep clear of the transfers panel in the bottom-right corner.
-        x: root.transfers.length > 0 ? Math.min((parent.width - self.width) / 2, parent.width - self.width - 380px)
+        limit-width: root.mobile ? root.width - 32px : 10000px;
+        // Keep clear of the transfers panel in the bottom-right corner, and of the phone's
+        // bottom navigation.
+        x: root.transfers.length > 0 && !root.mobile ? Math.min((parent.width - self.width) / 2, parent.width - self.width - 380px)
             : (parent.width - self.width) / 2;
-        y: parent.height - self.height - 24px;
+        y: parent.height - self.height - (root.mobile ? root.inset-bottom + 80px : 24px);
         text: root.toast-text;
         error: root.toast-error;
     }

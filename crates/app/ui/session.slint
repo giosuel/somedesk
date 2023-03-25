@@ -8,7 +8,7 @@ export struct MonitorChoice {
 }
 
 /// Segmented control to pick which of the host's monitors to show.
-component MonitorPicker inherits Rectangle {
+export component MonitorPicker inherits Rectangle {
     in property <[MonitorChoice]> choices;
     in property <int> selected;
     callback pick(int);

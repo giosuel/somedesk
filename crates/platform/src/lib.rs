@@ -1,8 +1,12 @@
 //! Platform backends: screen capture, input injection and the clipboard.
 //!
 //! Backends implement [`Capturer`], [`Injector`] and [`Clipboard`]: Linux X11, Linux Wayland (via
-//! the xdg-desktop-portal), Windows (GDI + SendInput) and macOS (CoreGraphics).
+//! the xdg-desktop-portal), Windows (GDI + SendInput) and macOS (CoreGraphics). Android only
+//! has a clipboard: the app there views other computers but does not share its own screen.
 
+#[cfg(target_os = "android")]
+pub mod android;
+#[cfg(not(target_os = "android"))]
 pub mod clipboard;
 #[cfg(target_os = "linux")]
 pub mod linux;
@@ -85,7 +89,15 @@ pub trait Clipboard: Send {
 
 /// Opens the system clipboard.
 pub fn default_clipboard() -> anyhow::Result<Box<dyn Clipboard>> {
+    #[cfg(target_os = "android")]
+    return Ok(Box::new(android::AndroidClipboard::open()?));
+    #[cfg(not(target_os = "android"))]
     Ok(Box::new(clipboard::SystemClipboard::open()?))
+}
+
+/// Whether [`open_screen`] is implemented here, i.e. whether others can connect to this device.
+pub const fn can_share_screen() -> bool {
+    cfg!(any(target_os = "linux", windows, target_os = "macos"))
 }
 
 /// The screen of this machine: a capturer and an injector that belong together.

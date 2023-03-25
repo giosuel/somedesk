@@ -1,0 +1,16 @@
+[package]
+name = "somedesk-android"
+description = "SomeDesk Android app (a native library loaded by the activity)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Loaded by Android's NativeActivity as libsomedesk.so; packaging/android/build-apk.sh builds the APK.
+[lib]
+name = "somedesk"
+crate-type = ["cdylib"]
+
+# Empty on other platforms, so `cargo build --workspace` stays cheap there.
+[target.'cfg(target_os = "android")'.dependencies]
+somedesk-app = { path = "../app" }

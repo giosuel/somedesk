@@ -3,13 +3,8 @@
 // No console window next to the app in Windows release builds.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod controller;
-mod keymap;
-
 use clap::Parser;
 use std::path::PathBuf;
-
-slint::include_modules!();
 
 #[derive(Parser)]
 #[command(name = "somedesk", version, about = "SomeDesk remote desktop client")]
@@ -20,6 +15,9 @@ struct Args {
     /// Pre-fill the server address on the sign-in screen.
     #[arg(long)]
     server: Option<String>,
+    /// Use the phone layout (as on Android), for trying it out on a desktop.
+    #[arg(long, env = "SOMEDESK_MOBILE_UI")]
+    mobile_ui: bool,
 }
 
 /// Where credentials and settings live: `$XDG_DATA_HOME/somedesk` on Linux, `%APPDATA%\somedesk`
@@ -40,12 +38,9 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
     let args = Args::parse();
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    let ui = AppWindow::new()?;
-    let controller = controller::Controller::new(&ui, runtime.handle().clone(), data_dir(&args.profile), args.server);
-    controller.start();
-    ui.run()?;
-    controller.shutdown();
-    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
-    Ok(())
+    somedesk_app::run(somedesk_app::Options {
+        data_dir: data_dir(&args.profile),
+        server: args.server,
+        mobile: args.mobile_ui,
+    })
 }
