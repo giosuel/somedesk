@@ -14,6 +14,24 @@ Windows builds use the MinGW toolchain (`x86_64-pc-windows-gnu`); ship `libstdc+
 *Screen Recording* (required) and *Accessibility* (for control; otherwise view-only). Neither
 covers the login screen or UAC prompts yet; that needs a system service / launch daemon.
 
+## Android
+
+The Android app (Android 8 and newer) connects to computers; it does not share the phone's
+screen. It uses the phone layout of the same UI: bottom navigation, and a full-screen session
+where a tap clicks, a long press right-clicks and dragging drags. A scroll mode turns dragging
+into the mouse wheel, and the keyboard button opens the soft keyboard with a row of Esc, Tab,
+Ctrl, Alt, arrows, Delete, Home, End and Super. A hardware keyboard works as on the desktop.
+Back ends a session, and leaves the app from the home screen.
+
+The clipboard is shared through Android's clipboard manager. Android only lets the app read it
+while it is in front, so text copied on the phone reaches the computer once SomeDesk is open again.
+Sending files from the phone isn't supported yet; received files are saved to *Download/SomeDesk*
+(not yet tested).
+
+Verified on the Android 15 emulator (x86_64): sign-in, sessions over a direct connection, touch
+input, typing through Gboard, scrolling, rotation and the clipboard from the computer. Not yet
+tried on a physical phone.
+
 ## Linux desktops
 
 The host picks its backend from the session: **X11** (XGetImage + XTest; RandR monitors can be

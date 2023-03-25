@@ -44,10 +44,21 @@ Download the package for your system from the
     - **Screen Recording** is required to share the screen.
     - **Accessibility** is needed for remote control. Without it, the screen is shared view-only.
 
+=== "Android"
+
+    Install `SomeDesk-<version>.apk` (Android 8 or newer): open it on the phone and allow
+    installing apps from that source when asked. The phone connects to your computers; it doesn't
+    share its own screen.
+
+    In a session, **tap** to click, **long-press** for a right click and **drag** to drag. The
+    scroll button turns dragging into scrolling, and the keyboard button opens the keyboard,
+    with a row for Esc, Tab, Ctrl, Alt and the arrow keys. Turn the phone sideways for a bigger
+    picture.
+
 ## Create an account
 
 1. Open SomeDesk and choose **Create an account**.
-2. Enter your server's address, a username, a password and a name for this computer.
+2. Enter your server's address, a username, a password and a name for this device.
 3. Save the **recovery key** that appears, in a password manager or on paper. It's the only way
    back into your account if you forget the password. Nobody else can reset it for you, not
    even the server's administrator.
