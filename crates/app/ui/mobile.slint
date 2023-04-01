@@ -239,6 +239,9 @@ export component MobileHomePage inherits Rectangle {
     in-out property <bool> share-clipboard;
     in-out property <bool> allow-direct;
     in-out property <HomeView> view: HomeView.connect;
+    /// What the tour points at ("" when it is not running).
+    in property <string> tour-target;
+    callback start-tour();
     /// The soft keyboard is up: the navigation makes way for the content.
     in property <bool> keyboard-open;
     callback allow-direct-changed(bool);
@@ -310,6 +313,7 @@ export component MobileHomePage inherits Rectangle {
                     alignment: start;
                     Heading { title: root.greeting; subtitle: "Reach one of your computers."; }
                     Card {
+                        highlighted: root.tour-target == "connect";
                         VerticalLayout {
                             padding: 18px;
                             spacing: 12px;
@@ -351,6 +355,7 @@ export component MobileHomePage inherits Rectangle {
                         }
                     }
                     Card {
+                        highlighted: root.tour-target == "devices";
                         VerticalLayout {
                             padding-top: 16px;
                             padding-bottom: 6px;
@@ -436,6 +441,7 @@ export component MobileHomePage inherits Rectangle {
                     alignment: start;
                     Heading { title: "Settings"; }
                     Card {
+                        highlighted: root.tour-target == "sessions";
                         VerticalLayout {
                             padding: 18px;
                             spacing: 16px;
@@ -456,6 +462,7 @@ export component MobileHomePage inherits Rectangle {
                         }
                     }
                     Card {
+                        highlighted: root.tour-target == "account";
                         VerticalLayout {
                             padding: 18px;
                             spacing: 14px;
@@ -483,11 +490,20 @@ export component MobileHomePage inherits Rectangle {
                                 Text { text: "Fingerprint"; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
                                 Text { text: root.fingerprint; color: Theme.text-2; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
                             }
-                            GhostButton {
-                                text: "Sign out";
-                                icon: Icons.logout;
-                                horizontal-stretch: 1;
-                                clicked => { root.sign-out(); }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                GhostButton {
+                                    text: "Take the tour";
+                                    icon: Icons.help;
+                                    horizontal-stretch: 1;
+                                    clicked => { root.start-tour(); }
+                                }
+                                GhostButton {
+                                    text: "Sign out";
+                                    icon: Icons.logout;
+                                    horizontal-stretch: 1;
+                                    clicked => { root.sign-out(); }
+                                }
                             }
                         }
                     }

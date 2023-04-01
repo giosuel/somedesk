@@ -1,6 +1,7 @@
 import { Theme } from "theme.slint";
 import { LoginPage } from "login.slint";
-import { HomePage, DeviceItem, ContactItem, RecentItem } from "home.slint";
+import { HomePage, DeviceItem, ContactItem, RecentItem, HomeView } from "home.slint";
+import { Tour, TourSteps } from "tour.slint";
 import { SessionPage, MonitorChoice } from "session.slint";
 import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
@@ -140,6 +141,15 @@ export component AppWindow inherits Window {
     in property <string> toast-text;
     in property <bool> toast-error;
 
+    // Tour
+    in-out property <bool> tour-visible;
+    in-out property <int> tour-step;
+    in-out property <HomeView> home-view: HomeView.connect;
+    property <string> tour-target: !root.tour-visible ? ""
+        : root.mobile ? TourSteps.mobile[root.tour-step].target : TourSteps.desktop[root.tour-step].target;
+    /// The tour was finished or skipped.
+    callback tour-done();
+
     // Phone layout: pages stay clear of the system bars and the soft keyboard.
     property <length> keyboard-height: root.virtual-keyboard-size.height > 0 ? Math.max(0px, root.height - root.virtual-keyboard-position.y) : 0px;
     property <length> inset-top: root.mobile ? root.safe-area-insets.top : 0px;
@@ -200,6 +210,9 @@ export component AppWindow inherits Window {
         sign-out => { root.sign-out(); }
         stop-hosting => { root.stop-hosting(); }
         send-files => { root.send-files(); }
+        view <=> root.home-view;
+        tour-target: root.tour-target;
+        start-tour => { root.tour-step = 0; root.tour-visible = true; }
     }
 
     if root.page == Page.session && !root.mobile: SessionPage {
@@ -271,6 +284,9 @@ export component AppWindow inherits Window {
         share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
         sign-out => { root.sign-out(); }
         keyboard-open: root.keyboard-height > 0;
+        view <=> root.home-view;
+        tour-target: root.tour-target;
+        start-tour => { root.tour-step = 0; root.tour-visible = true; }
     }
 
     if root.page == Page.session && root.mobile: MobileSessionPage {
@@ -297,6 +313,18 @@ export component AppWindow inherits Window {
         soft-text <=> root.session-soft-text;
         soft-input(t, c, a) => { root.soft-input(t, c, a); }
         soft-key(t, c, a) => { root.soft-key(t, c, a); }
+    }
+
+    if root.tour-visible && root.page == Page.home: Tour {
+        mobile: root.mobile;
+        inset-bottom: root.inset-bottom;
+        step <=> root.tour-step;
+        show(v) => { root.home-view = v; }
+        done => {
+            root.tour-visible = false;
+            root.home-view = HomeView.connect;
+            root.tour-done();
+        }
     }
 
     if root.outgoing-visible: OutgoingDialog {

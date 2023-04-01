@@ -179,6 +179,9 @@ export component HomePage inherits Rectangle {
     in property <bool> hosting-active;
     in property <string> hosting-peer;
     in-out property <HomeView> view: HomeView.connect;
+    /// What the tour points at ("" when it is not running).
+    in property <string> tour-target;
+    callback start-tour();
     callback connect(string);
     callback copy-id();
     callback auto-accept-changed(bool);
@@ -307,6 +310,7 @@ export component HomePage inherits Rectangle {
                 HorizontalLayout {
                     spacing: 20px;
                     Card {
+                        highlighted: root.tour-target == "id";
                         width: 330px;
                         VerticalLayout {
                             padding: 22px;
@@ -346,6 +350,7 @@ export component HomePage inherits Rectangle {
                         }
                     }
                     Card {
+                        highlighted: root.tour-target == "connect";
                         horizontal-stretch: 1;
                         VerticalLayout {
                             padding: 22px;
@@ -394,6 +399,7 @@ export component HomePage inherits Rectangle {
                     }
                 }
                 Card {
+                    highlighted: root.tour-target == "devices";
                     vertical-stretch: 1;
                     VerticalLayout {
                         padding: 10px;
@@ -490,6 +496,7 @@ export component HomePage inherits Rectangle {
                 alignment: start;
                 PageHeader { title: "Settings"; }
                 Card {
+                    highlighted: root.tour-target == "sessions";
                     VerticalLayout {
                         padding: 22px;
                         spacing: 18px;
@@ -517,6 +524,7 @@ export component HomePage inherits Rectangle {
                     }
                 }
                 Card {
+                    highlighted: root.tour-target == "account";
                     VerticalLayout {
                         padding: 22px;
                         spacing: 14px;
@@ -531,6 +539,12 @@ export component HomePage inherits Rectangle {
                                 Text { text: root.server-label; color: Theme.subtle; font-size: 12px; }
                             }
                             Rectangle { horizontal-stretch: 1; }
+                            GhostButton {
+                                y: (parent.height - self.height) / 2;
+                                text: "Take the tour";
+                                icon: Icons.help;
+                                clicked => { root.start-tour(); }
+                            }
                             GhostButton {
                                 y: (parent.height - self.height) / 2;
                                 text: "Sign out";
