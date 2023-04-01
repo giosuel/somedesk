@@ -28,6 +28,7 @@ hide:
 
 <div class="sd-figure">
   <img src="assets/hero.svg" alt="A viewer controls a host over an end-to-end encrypted tunnel; the server only sees ciphertext">
+  <img class="sd-mascot sd-mascot--hero" src="assets/mascot/wave.svg" alt="Desi, the SomeDesk mascot, waving">
 </div>
 
 </div>
@@ -104,7 +105,24 @@ Enter the other computer's nine-digit ID. The person there sees who you are and 
   <figure class="sd-shot"><img src="media/identity-changed.webp" alt="Identity changed warning" loading="lazy"><figcaption>A changed identity stops the connection before it starts.</figcaption></figure>
 </div>
 
+<div class="sd-meet">
+  <div class="sd-meet__text">
+    <h2>Meet Desi</h2>
+    <p>The first time you sign in, Desi shows you around: your ID, how to reach your other computers, and what keeps your sessions private. Five quick steps, and she's always one click away in Settings.</p>
+    <div class="sd-meet__poses" aria-hidden="true">
+      <img src="assets/mascot/wave.svg" alt="">
+      <img src="assets/mascot/point.svg" alt="">
+      <img src="assets/mascot/connect.svg" alt="">
+      <img src="assets/mascot/key.svg" alt="">
+      <img src="assets/mascot/cheer.svg" alt="">
+    </div>
+  </div>
+  <figure class="sd-shot sd-meet__shot"><img src="media/tour.webp" alt="The welcome tour: Desi points at this computer's ID" loading="lazy"><figcaption>The welcome tour on the desktop. On a phone, Desi stands on the bottom card.</figcaption></figure>
+</div>
+
 <div class="sd-cta" markdown>
+
+<img class="sd-mascot sd-mascot--cta" src="assets/mascot/cheer.svg" alt="">
 
 ## Take back your remote desktop
 

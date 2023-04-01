@@ -63,6 +63,14 @@ Download the package for your system from the
    back into your account if you forget the password. Nobody else can reset it for you, not
    even the server's administrator.
 
+<div class="sd-note-mascot" markdown>
+<img src="../assets/mascot/key.svg" alt="Desi holding the recovery key">
+<div markdown>
+**Keep that key safe!** Desi's welcome tour starts right after you sign in. It shows where
+everything is, and you can take it again from **Settings**.
+</div>
+</div>
+
 On another computer, sign in with the same account to add it to **Devices**.
 
 !!! tip "Check the server's identity"
