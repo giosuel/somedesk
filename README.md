@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <a href="https://giosuel.github.io/somedesk/"><b>Documentation</b></a> ·
+  <a href="https://somedesk.giosuel.ch/"><b>Documentation</b></a> ·
   <a href="https://github.com/giosuel/somedesk/releases"><b>Download</b></a> ·
   <a href="docs/self-hosting.md"><b>Self-hosting</b></a> ·
   <a href="docs/security.md"><b>Security model</b></a>
