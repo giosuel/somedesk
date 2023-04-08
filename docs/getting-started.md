@@ -28,6 +28,13 @@ Download the package for your system from the
     sudo apt install ./somedesk-app_*.deb
     ```
 
+    **Arch Linux:** from the AUR, built from source ([`somedesk`](https://aur.archlinux.org/packages/somedesk))
+    or prebuilt ([`somedesk-bin`](https://aur.archlinux.org/packages/somedesk-bin)).
+
+    ```sh
+    yay -S somedesk
+    ```
+
     On X11 it works out of the box. On Wayland, the desktop asks for permission the first time
     someone connects: choose **Share** and switch on **Allow Remote Interaction**. See [Linux desktops](platforms.md#linux-desktops).
 
