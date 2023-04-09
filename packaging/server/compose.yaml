@@ -1,6 +1,8 @@
-# Server + PostgreSQL. From the repository root:
-#   SOMEDESK_DB_PASSWORD=change-me podman compose -f packaging/server/compose.yaml up -d
-# (or `docker compose`). Clients connect to this host on UDP 21116.
+# Server + PostgreSQL, with the published server image (x86-64 and ARM64):
+#   SOMEDESK_DB_PASSWORD=change-me docker compose -f packaging/server/compose.yaml up -d
+# (or `podman compose`). Clients connect to this host on UDP 21116.
+# SOMEDESK_IMAGE picks another image: a version such as ghcr.io/giosuel/somedesk-server:0.1.0,
+# :main for the latest code on main, or one you built (podman build -f packaging/server/Dockerfile).
 services:
   db:
     image: docker.io/library/postgres:17
@@ -16,9 +18,7 @@ services:
       retries: 10
     restart: unless-stopped
   server:
-    build:
-      context: ../..
-      dockerfile: packaging/server/Dockerfile
+    image: ${SOMEDESK_IMAGE:-ghcr.io/giosuel/somedesk-server:latest}
     environment:
       DATABASE_URL: postgres://somedesk:${SOMEDESK_DB_PASSWORD}@db/somedesk
     ports:
