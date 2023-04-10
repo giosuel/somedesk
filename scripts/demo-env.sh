@@ -2,11 +2,16 @@
 # Starts a local demo environment: a SomeDesk server on a fresh database and two virtual
 # X displays (:50 = viewer "alice", :51 = host "bob"), each with a window manager.
 # State is kept in $DEMO_DIR; run scripts/demo-env.sh stop to tear it down.
+#
+# The server listens on 127.0.0.1:21216 (SOMEDESK_DEMO_PORT), not the default 21116, so it never
+# collides with a real SomeDesk server on the same machine. Start the apps with
+# `--server 127.0.0.1:21216`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DEMO_DIR="${DEMO_DIR:-/tmp/somedesk-demo}"
 ADMIN_URL="${SOMEDESK_TEST_DATABASE_URL:-postgres://sysadmin:devpass@localhost/postgres}"
 DB_URL="${ADMIN_URL%/*}/somedesk_demo"
+PORT="${SOMEDESK_DEMO_PORT:-21216}"
 
 stop() {
     for f in "$DEMO_DIR"/*.pid; do [ -e "$f" ] && kill "$(cat "$f")" 2>/dev/null || true; rm -f "$f"; done
@@ -29,8 +34,14 @@ for d in 50 51; do
     echo $! >"$DEMO_DIR/openbox$d.pid"
 done
 
-target/debug/somedesk-server --listen 127.0.0.1:21116 --database-url "$DB_URL" --data-dir "$DEMO_DIR/server-data" \
+target/debug/somedesk-server --listen "127.0.0.1:$PORT" --database-url "$DB_URL" --data-dir "$DEMO_DIR/server-data" \
     >"$DEMO_DIR/server.log" 2>&1 &
 echo $! >"$DEMO_DIR/server.pid"
 sleep 1
+if ! kill -0 "$(cat "$DEMO_DIR/server.pid")" 2>/dev/null; then
+    tail -5 "$DEMO_DIR/server.log" >&2
+    echo "error: the server didn't start (is port $PORT in use? set SOMEDESK_DEMO_PORT)" >&2
+    exit 1
+fi
+echo "server: 127.0.0.1:$PORT (start the apps with --server 127.0.0.1:$PORT)"
 echo "server log: $DEMO_DIR/server.log"

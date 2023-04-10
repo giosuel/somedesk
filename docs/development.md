@@ -18,7 +18,10 @@ image.
 network namespaces and checks that peers connect directly behind ordinary NATs and fall back to the
 relay behind symmetric ones.
 
-`scripts/demo-env.sh` starts a server and two virtual displays for manual testing.
+`scripts/demo-env.sh` starts a server and two virtual displays for manual testing. Its server
+listens on `127.0.0.1:21216`, not the default port 21116, so it doesn't collide with a real
+server on the same machine: start the apps with `--server 127.0.0.1:21216`, and run
+`scripts/demo-env.sh stop` when you're done.
 `somedesk --mobile-ui` (or `SOMEDESK_MOBILE_UI=1`) shows the phone layout on the desktop.
 
 ## Android
@@ -30,7 +33,7 @@ SDK's `aapt2`, `zipalign` and `apksigner` (no Gradle). The script lists what it 
 
 To try it on an emulator (`emulator -avd <name>`), install the APK with
 `adb install target/dist/SomeDesk-*.apk`. The emulator reaches the computer it runs on as
-`10.0.2.2`, so a local `scripts/demo-env.sh` server is at that address. Logs go to logcat under
+`10.0.2.2`, so a local `scripts/demo-env.sh` server is at `10.0.2.2:21216`. Logs go to logcat under
 the tag `somedesk` (`adb logcat -s somedesk`).
 `scripts/wayland-env.sh` starts a headless GNOME Wayland session (with PipeWire and the portal);
 `scripts/gnome-input.sh` drives it like `xdotool`, and `scripts/wayland-grant.sh` answers the
