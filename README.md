@@ -104,7 +104,7 @@ Both devices stay connected to your server, which gives them their IDs and tells
 
 ## Status
 
-Remote control works end to end on **Linux**, both X11 and Wayland (through the desktop portal). The **Windows** and **macOS** backends are written and pass their tests in CI, but haven't yet been used in real sessions on those systems. The **Android** app connects to and controls your computers (it doesn't share the phone's screen), tested on the Android emulator. See [Platforms](docs/platforms.md).
+Remote control works end to end on **Linux**, both X11 and Wayland (through the desktop portal; on Hyprland and Sway, input goes through their virtual pointer and keyboard). The **Windows** and **macOS** backends are written and pass their tests in CI, but haven't yet been used in real sessions on those systems. The **Android** app connects to and controls your computers (it doesn't share the phone's screen), tested on the Android emulator. See [Platforms](docs/platforms.md).
 
 Organisations enroll machines with `somedesk-agent`, which ships with every package; see [Organisations](docs/organisations.md).
 

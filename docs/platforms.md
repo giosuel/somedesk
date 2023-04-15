@@ -5,7 +5,8 @@
 | Host platform | Capture | Input | Verified |
 |---|---|---|---|
 | Linux X11 | XGetImage, RandR monitors | XTest | end to end (tests + manual) |
-| Linux Wayland | xdg-desktop-portal + PipeWire | portal RemoteDesktop | end to end in headless GNOME |
+| Linux Wayland: GNOME, KDE | xdg-desktop-portal + PipeWire | portal RemoteDesktop | end to end in headless GNOME |
+| Linux Wayland: Hyprland, Sway, river, … | xdg-desktop-portal + PipeWire | virtual pointer + keyboard protocols | input end to end in headless Sway (tests); not yet on Hyprland itself, nor capture on these desktops |
 | Windows | GDI BitBlt, all monitors | SendInput | backend tests pass under Wine; app UI runs under Wine; networking needs real Windows (Wine lacks `IP_RECVECN`, which QUIC uses) |
 | macOS | CoreGraphics display images | CGEvent | compile-checked only |
 
@@ -69,10 +70,22 @@ viewed one at a time), or on **Wayland** the
 On Wayland the desktop itself asks the person at the host for permission the first time someone
 connects (after they accepted in SomeDesk). They choose *Share* and switch on *Allow Remote
 Interaction*; SomeDesk tells them so. The portal's restore token is stored next to the device
-credentials, so later sessions start without asking again. If remote interaction is not allowed,
-or the desktop has no remote-input portal (wlroots compositors such as sway), the screen is shared
-view-only and the viewer is told.
+credentials, so later sessions start without asking again.
 
-Known gaps: the view-only path on wlroots is untested (xdg-desktop-portal-wlr cannot capture a
-GPU-less headless sway); clipboard sharing on GNOME Wayland goes through XWayland, since GNOME
+![On GNOME and KDE the portal carries the screen and the input; on Hyprland and Sway the portal carries the screen and the virtual pointer and keyboard carry the input](assets/wayland-input.svg)
+
+**Hyprland, Sway and other wlroots-style desktops** have a portal for the screen
+(`xdg-desktop-portal-hyprland`, `xdg-desktop-portal-wlr`) but none for remote input. There,
+SomeDesk sends the viewer's mouse and keyboard through the compositor's virtual pointer and
+virtual keyboard protocols, as wayvnc does. The virtual keyboard brings its own keymap, built as
+keys come in, so the viewer can type any character whatever the host's keyboard layout. The
+pointer is tied to the monitor the portal shares. On Hyprland with
+`ecosystem:enforce_permissions` on, allow SomeDesk's virtual keyboard when Hyprland asks.
+
+If remote interaction is not allowed, or the desktop offers neither way, the screen is shared
+view-only: the person at the host is told why, and the viewer sees *View only* in its toolbar.
+
+Known gaps: screen capture on wlroots desktops is untested (their portals can't capture a
+GPU-less headless compositor), and Hyprland itself is only covered by its protocols being the
+ones the Sway test uses. Clipboard sharing on GNOME Wayland goes through XWayland, since GNOME
 does not offer the Wayland data-control protocol.

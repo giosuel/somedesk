@@ -45,6 +45,8 @@ pub fn open_screen() -> anyhow::Result<Screen> {
         capturer: Box::new(DisplayCapturer::default()),
         injector: Box::new(EventInjector::default()),
         can_control,
+        view_only_reason: (!can_control)
+            .then_some("SomeDesk may not control this Mac (System Settings › Privacy & Security › Accessibility)"),
         backend: "macos-coregraphics",
     })
 }
