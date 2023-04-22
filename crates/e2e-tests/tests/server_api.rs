@@ -16,24 +16,98 @@ fn code<T>(r: Result<T, ClientError>) -> ErrorCode {
 }
 
 #[tokio::test]
-async fn register_login_enroll_authenticate() {
+async fn register_login_and_sign_a_device_in() {
     let Some(ts) = TestServer::start().await else {
         return;
     };
     let alice = ts.signup("alice", "correct horse battery", "alice-laptop").await;
     assert!((100_000_000..=999_999_999).contains(&alice.creds.device_id));
-    assert_eq!(alice.creds.username, "alice");
+    assert_eq!(alice.creds.username(), Some("alice"));
 
     let devices = alice.conn.list_devices().await.unwrap();
     assert_eq!(devices.len(), 1);
-    assert_eq!(devices[0].name, "alice-laptop");
+    assert_eq!(devices[0].identity.name, "alice-laptop");
     assert!(devices[0].online);
-    somedesk_crypto::keys::verify_device_cert(&devices[0].cert).unwrap();
+    somedesk_crypto::keys::verify_device_cert(devices[0].identity.account.as_ref().unwrap()).unwrap();
 
     // The same identity key is recovered on a second login (it came out of the encrypted bundle).
     let (conn2, _) = ts.connect().await;
     let login = conn2.login("ALICE", "correct horse battery").await.unwrap();
-    assert_eq!(login.identity.public(), alice.creds.identity_pk);
+    assert_eq!(login.identity.public(), alice.creds.account.as_ref().unwrap().identity_pk);
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn devices_get_an_id_without_an_account() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let mut laptop = ts.anonymous("laptop").await;
+    let id = laptop.creds.device_id;
+    assert!((100_000_000..=999_999_999).contains(&id));
+    assert_eq!(laptop.creds.account.as_ref().map(|a| &a.username), None);
+
+    // Anyone can look it up by its ID, and it has no account.
+    let other = ts.anonymous("phone").await;
+    let info = other.conn.lookup_device(id).await.unwrap();
+    assert!(info.online);
+    assert_eq!(info.identity.name, "laptop");
+    assert_eq!(info.identity.account, None);
+    // Only accounts have a device list.
+    assert_eq!(code(other.conn.list_devices().await), ErrorCode::NotAuthenticated);
+
+    // The ID belongs to the key: it comes back the same after a restart (a new connection), and
+    // the name follows the device.
+    laptop.conn.close();
+    let (conn, _) = ts.connect().await;
+    laptop.creds.device_name = "laptop 2".into();
+    let again = conn.authenticate(&mut laptop.creds).await.unwrap();
+    assert_eq!((again.device_id, again.identity.name.as_str()), (id, "laptop 2"));
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn signing_in_and_out_keeps_the_id() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let mut laptop = ts.signup("alice", "correct horse battery", "laptop").await;
+    let mut desktop = ts.anonymous("desktop").await;
+    let id = desktop.creds.device_id;
+
+    let login = desktop.conn.login("alice", "correct horse battery").await.unwrap();
+    desktop.conn.attach(&login, &mut desktop.creds).await.unwrap();
+    assert_eq!(desktop.creds.device_id, id);
+    assert_eq!(desktop.creds.username(), Some("alice"));
+    let ev = tokio::time::timeout(Duration::from_secs(5), laptop.events.recv()).await.unwrap().unwrap();
+    assert!(matches!(ev, Event::DevicePresence { device_id, online: true } if device_id == id));
+    assert_eq!(laptop.conn.list_devices().await.unwrap().len(), 2);
+
+    desktop.conn.detach(&mut desktop.creds).await.unwrap();
+    assert_eq!(desktop.creds.username(), None);
+    let ev = tokio::time::timeout(Duration::from_secs(5), laptop.events.recv()).await.unwrap().unwrap();
+    assert!(matches!(ev, Event::DevicePresence { device_id, online: false } if device_id == id));
+    assert_eq!(laptop.conn.list_devices().await.unwrap().len(), 1);
+    // Still online under the same ID, just without the account.
+    let info = laptop.conn.lookup_device(id).await.unwrap();
+    assert!(info.online && info.identity.account.is_none());
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn an_accounts_only_server_turns_other_devices_away() {
+    let Some(ts) = TestServer::start_with(false).await else {
+        return;
+    };
+    let (conn, _) = ts.connect().await;
+    assert_eq!(code(conn.create_device(&ts.addr, "laptop").await), ErrorCode::Forbidden);
+    // With an account it works: log in first, then sign the new device in.
+    let alice = ts.signup("alice", "correct horse battery", "laptop").await;
+    // Signed out, the device can't come back.
+    let mut creds = alice.creds.clone();
+    alice.conn.detach(&mut creds).await.unwrap();
+    let (conn, _) = ts.connect().await;
+    assert_eq!(code(conn.authenticate(&mut creds).await), ErrorCode::Forbidden);
     ts.stop().await;
 }
 
@@ -88,40 +162,51 @@ async fn database_holds_no_password_and_no_plaintext_key() {
 }
 
 #[tokio::test]
-async fn device_enrollment_requires_password_login_and_valid_cert() {
+async fn signing_in_needs_a_password_login_and_a_valid_certificate() {
     let Some(ts) = TestServer::start().await else {
         return;
     };
     let _alice = ts.signup("alice", "correct horse battery", "pc").await;
+    let device = ts.anonymous("evil").await;
+    let key = device.creds.device_key();
+    let rogue = IdentityKey::generate();
 
     // Without logging in.
-    let (conn, _) = ts.connect().await;
-    let rogue = IdentityKey::generate();
-    let cert = rogue.certify_device("alice", DeviceKey::generate().public(), "evil", 0);
-    assert_eq!(code(conn.request(Request::RegisterDevice { cert }).await), ErrorCode::NotAuthenticated);
+    let cert = rogue.certify_device("alice", key.public(), "evil", 0);
+    assert_eq!(code(device.conn.request(Request::AttachDevice { cert }).await), ErrorCode::NotAuthenticated);
 
     // Logged in, but the certificate is signed by a different identity key.
-    conn.login("alice", "correct horse battery").await.unwrap();
-    let cert = rogue.certify_device("alice", DeviceKey::generate().public(), "evil", 0);
-    assert_eq!(code(conn.request(Request::RegisterDevice { cert }).await), ErrorCode::BadRequest);
+    let login = device.conn.login("alice", "correct horse battery").await.unwrap();
+    let cert = rogue.certify_device("alice", key.public(), "evil", 0);
+    assert_eq!(code(device.conn.request(Request::AttachDevice { cert }).await), ErrorCode::BadRequest);
+    // Signed by the account, but for another device.
+    let cert = login.identity.certify_device("alice", DeviceKey::generate().public(), "evil", 0);
+    assert_eq!(code(device.conn.request(Request::AttachDevice { cert }).await), ErrorCode::BadRequest);
     ts.stop().await;
 }
 
 #[tokio::test]
-async fn token_auth_rejects_bad_tokens() {
+async fn devices_must_prove_their_key() {
     let Some(ts) = TestServer::start().await else {
         return;
     };
     let alice = ts.signup("alice", "correct horse battery", "pc").await;
     let (conn, _) = ts.connect().await;
+    // No challenge asked for.
+    assert_eq!(
+        code(conn.request(Request::DeviceAuth { name: "x".into(), proof: [0; 32] }).await),
+        ErrorCode::BadRequest
+    );
+    // Alice's public key, without her private key.
+    let public = alice.creds.device_key().public();
+    conn.request(Request::DeviceChallenge { device_pk: public }).await.unwrap();
+    assert_eq!(
+        code(conn.request(Request::DeviceAuth { name: "x".into(), proof: [7; 32] }).await),
+        ErrorCode::AuthFailed
+    );
+    // The real key works from a fresh connection (e.g. after a restart), with the same ID.
     let mut creds = alice.creds.clone();
-    creds.token[0] ^= 1;
-    assert_eq!(code(conn.authenticate(&creds).await), ErrorCode::AuthFailed);
-    creds = alice.creds.clone();
-    creds.device_id = 111_111_111;
-    assert_eq!(code(conn.authenticate(&creds).await), ErrorCode::AuthFailed);
-    // The real token works from a fresh connection (e.g. after a restart).
-    conn.authenticate(&alice.creds).await.unwrap();
+    assert_eq!(conn.authenticate(&mut creds).await.unwrap().device_id, alice.creds.device_id);
     ts.stop().await;
 }
 
@@ -213,15 +298,22 @@ async fn pinned_certificate_mismatch_is_refused() {
 }
 
 #[tokio::test]
-async fn removed_device_cannot_authenticate() {
+async fn a_removed_device_leaves_the_account_but_keeps_its_id() {
     let Some(ts) = TestServer::start().await else {
         return;
     };
     let laptop = ts.signup("alice", "correct horse battery", "laptop").await;
-    let phone = ts.add_device("alice", "correct horse battery", "old-pc").await;
-    laptop.conn.remove_device(phone.creds.device_id).await.unwrap();
+    let mut old = ts.add_device("alice", "correct horse battery", "old-pc").await;
+    let id = old.creds.device_id;
+    laptop.conn.remove_device(id).await.unwrap();
+    let ev = tokio::time::timeout(Duration::from_secs(5), old.events.recv()).await.unwrap().unwrap();
+    assert!(matches!(ev, Event::SignedOut), "the device is told: {ev:?}");
+    assert_eq!(laptop.conn.list_devices().await.unwrap().len(), 1);
+    // On its next start it finds itself signed out, under the same ID.
     let (conn, _) = ts.connect().await;
-    assert_eq!(code(conn.authenticate(&phone.creds).await), ErrorCode::AuthFailed);
+    let info = conn.authenticate(&mut old.creds).await.unwrap();
+    assert_eq!(info.device_id, id);
+    assert_eq!(old.creds.account.as_ref().map(|a| &a.username), None);
     // Other users cannot remove your devices.
     let bob = ts.signup("bob", "correct horse battery", "pc").await;
     assert_eq!(code(bob.conn.remove_device(laptop.creds.device_id).await), ErrorCode::NotFound);

@@ -1,6 +1,6 @@
 //! Connection to the SomeDesk server.
 
-use crate::credentials::DeviceCredentials;
+use crate::credentials::{AccountCredentials, DeviceCredentials};
 use crate::direct::DirectHub;
 use crate::tls::PinningVerifier;
 use crate::{ClientError, Result};
@@ -291,39 +291,84 @@ impl ServerConn {
         Ok(LoggedIn { username, identity, has_recovery })
     }
 
-    /// Enrolls this machine under the logged-in account.
-    pub async fn enroll_device(&self, server: &str, login: &LoggedIn, device_name: &str) -> Result<DeviceCredentials> {
-        let key = DeviceKey::generate();
-        let now =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        let cert = login.identity.certify_device(&login.username, key.public(), device_name.trim(), now);
-        let Response::DeviceRegistered { device_id, token } =
-            self.request(Request::RegisterDevice { cert: cert.clone() }).await?
+    /// Brings the device with `key` online under the name `name`: proves to the server that this
+    /// connection holds the key. A key the server doesn't know yet gets a new ID.
+    pub async fn come_online(&self, key: &DeviceKey, name: &str) -> Result<DeviceInfo> {
+        let Response::DeviceChallenge { server_pk, nonce } =
+            self.request(Request::DeviceChallenge { device_pk: key.public() }).await?
         else {
             return Err(unexpected());
         };
+        let proof = key.prove(&server_pk, &nonce);
+        match self.request(Request::DeviceAuth { name: name.trim().to_owned(), proof }).await? {
+            Response::Authenticated { device } => Ok(device),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Sets up this installation: creates its device key and brings it online, which gives it
+    /// its ID. No account is needed (unless the server only lets in its accounts' devices; then
+    /// log in on this connection first and [`ServerConn::attach`] right after).
+    pub async fn create_device(&self, server: &str, name: &str) -> Result<DeviceCredentials> {
+        let key = DeviceKey::generate();
+        let device = self.come_online(&key, name).await?;
+        self.announce_candidates().await?;
         Ok(DeviceCredentials {
             server: server.to_owned(),
             server_fingerprint: self.fingerprint,
-            username: login.username.clone(),
-            identity_pk: login.identity.public(),
-            device_id,
+            device_id: device.device_id,
             device_secret: *key.secret_bytes(),
-            cert,
-            token,
+            device_name: device.identity.name,
+            account: None,
         })
     }
 
-    /// Authenticates as an enrolled device; the device is online while this connection lives.
-    /// Also tells the server where the device can be reached directly (see
-    /// [`ServerConn::set_allow_direct`]).
-    pub async fn authenticate(&self, creds: &DeviceCredentials) -> Result<DeviceInfo> {
-        let device = match self.request(Request::TokenAuth { device_id: creds.device_id, token: creds.token }).await? {
-            Response::Authenticated { device, .. } => device,
-            _ => return Err(unexpected()),
-        };
+    /// Brings an existing device online; it is online while this connection lives. Also tells
+    /// the server where the device can be reached directly (see
+    /// [`ServerConn::set_allow_direct`]). Updates `creds` if the server knows the device
+    /// differently: under another ID (e.g. after the server lost its data) or off its account.
+    pub async fn authenticate(&self, creds: &mut DeviceCredentials) -> Result<DeviceInfo> {
+        let device = self.come_online(&creds.device_key(), &creds.device_name).await?;
+        if device.device_id != creds.device_id {
+            tracing::warn!(old = creds.device_id, new = device.device_id, "the server gave this device a new ID");
+            creds.device_id = device.device_id;
+        }
+        if device.identity.account.is_none() && creds.account.is_some() {
+            tracing::info!("this device was signed out of its account elsewhere");
+            creds.account = None;
+        }
         self.announce_candidates().await?;
         Ok(device)
+    }
+
+    /// Signs this (online) device in to the logged-in account. The device keeps its ID.
+    pub async fn attach(&self, login: &LoggedIn, creds: &mut DeviceCredentials) -> Result<()> {
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let cert =
+            login.identity.certify_device(&login.username, creds.device_key().public(), creds.device_name.trim(), now);
+        match self.request(Request::AttachDevice { cert: cert.clone() }).await? {
+            Response::Ok => {
+                creds.account = Some(AccountCredentials {
+                    username: login.username.clone(),
+                    identity_pk: login.identity.public(),
+                    cert,
+                });
+                Ok(())
+            }
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Signs this device out of its account. It keeps its ID.
+    pub async fn detach(&self, creds: &mut DeviceCredentials) -> Result<()> {
+        match self.request(Request::DetachDevice).await? {
+            Response::Ok => {
+                creds.account = None;
+                Ok(())
+            }
+            _ => Err(unexpected()),
+        }
     }
 
     /// Whether sessions may use direct connections (default: yes). Without, this device's
@@ -360,6 +405,7 @@ impl ServerConn {
         }
     }
 
+    /// Takes one of the account's devices off the account (it keeps its ID).
     pub async fn remove_device(&self, device_id: u64) -> Result<()> {
         match self.request(Request::RemoveDevice { device_id }).await? {
             Response::Ok => Ok(()),

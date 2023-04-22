@@ -130,47 +130,54 @@ pub async fn user_exists(pool: &PgPool, username: &str) -> anyhow::Result<bool> 
 #[derive(Clone)]
 pub struct DeviceRow {
     pub id: u64,
+    pub device_pk: [u8; 32],
+    pub name: String,
+    /// The account the device is signed in to, with its certificate for the device key.
+    pub account: Option<DeviceAccount>,
+}
+
+#[derive(Clone)]
+pub struct DeviceAccount {
     pub user_id: i64,
     pub username: String,
-    pub name: String,
     pub cert: DeviceCert,
-    pub token_hash: Vec<u8>,
 }
 
 fn device_from_row(r: sqlx::postgres::PgRow) -> anyhow::Result<DeviceRow> {
-    let cert: Vec<u8> = r.get("cert");
     let id: i64 = r.get("id");
+    let device_pk: Vec<u8> = r.get("device_pk");
+    let user_id: Option<i64> = r.get("user_id");
+    let username: Option<String> = r.get("username");
+    let cert: Option<Vec<u8>> = r.get("cert");
+    let account = match (user_id, username, cert) {
+        (Some(user_id), Some(username), Some(cert)) => {
+            Some(DeviceAccount { user_id, username, cert: postcard::from_bytes(&cert)? })
+        }
+        _ => None,
+    };
     Ok(DeviceRow {
         id: id as u64,
-        user_id: r.get("user_id"),
-        username: r.get("username"),
+        device_pk: device_pk.try_into().map_err(|_| anyhow::anyhow!("corrupt device_pk"))?,
         name: r.get("name"),
-        cert: postcard::from_bytes(&cert)?,
-        token_hash: r.get("token_hash"),
+        account,
     })
 }
 
 const DEVICE_COLUMNS: &str =
-    "d.id, d.user_id, u.username, d.name, d.cert, d.token_hash FROM devices d JOIN users u ON u.id = d.user_id";
+    "d.id, d.device_pk, d.name, d.user_id, u.username, d.cert FROM devices d LEFT JOIN users u ON u.id = d.user_id";
 
-/// Inserts a device under a fresh random 9-digit id.
-pub async fn insert_device(pool: &PgPool, user_id: i64, cert: &DeviceCert, token_hash: &[u8]) -> anyhow::Result<u64> {
-    let cert_bytes = postcard::to_stdvec(cert)?;
+/// Registers a device key under a fresh random 9-digit id.
+pub async fn insert_device(pool: &PgPool, device_pk: &[u8; 32], name: &str) -> anyhow::Result<u64> {
     for _ in 0..20 {
         let id = rand::thread_rng().gen_range(DEVICE_ID_MIN..=DEVICE_ID_MAX);
-        let inserted = sqlx::query(
-            "INSERT INTO devices (id, user_id, name, device_pk, cert, token_hash) VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind(id as i64)
-        .bind(user_id)
-        .bind(&cert.device_name)
-        .bind(cert.device_pk.as_slice())
-        .bind(&cert_bytes)
-        .bind(token_hash)
-        .execute(pool)
-        .await?
-        .rows_affected();
+        let inserted =
+            sqlx::query("INSERT INTO devices (id, name, device_pk) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING")
+                .bind(id as i64)
+                .bind(name)
+                .bind(device_pk.as_slice())
+                .execute(pool)
+                .await?
+                .rows_affected();
         if inserted == 1 {
             return Ok(id);
         }
@@ -187,6 +194,15 @@ pub async fn get_device(pool: &PgPool, device_id: u64) -> anyhow::Result<Option<
         .transpose()
 }
 
+pub async fn get_device_by_key(pool: &PgPool, device_pk: &[u8; 32]) -> anyhow::Result<Option<DeviceRow>> {
+    sqlx::query(&format!("SELECT {DEVICE_COLUMNS} WHERE d.device_pk = $1"))
+        .bind(device_pk.as_slice())
+        .fetch_optional(pool)
+        .await?
+        .map(device_from_row)
+        .transpose()
+}
+
 pub async fn list_devices(pool: &PgPool, user_id: i64) -> anyhow::Result<Vec<DeviceRow>> {
     sqlx::query(&format!("SELECT {DEVICE_COLUMNS} WHERE d.user_id = $1 ORDER BY d.created_at"))
         .bind(user_id)
@@ -197,13 +213,34 @@ pub async fn list_devices(pool: &PgPool, user_id: i64) -> anyhow::Result<Vec<Dev
         .collect()
 }
 
-pub async fn delete_device(pool: &PgPool, user_id: i64, device_id: u64) -> anyhow::Result<bool> {
-    Ok(sqlx::query("DELETE FROM devices WHERE id = $1 AND user_id = $2")
+pub async fn set_device_name(pool: &PgPool, device_id: u64, name: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE devices SET name = $2 WHERE id = $1").bind(device_id as i64).bind(name).execute(pool).await?;
+    Ok(())
+}
+
+/// Signs a device in to an account.
+pub async fn attach_device(pool: &PgPool, device_id: u64, user_id: i64, cert: &DeviceCert) -> anyhow::Result<()> {
+    sqlx::query("UPDATE devices SET user_id = $2, cert = $3, name = $4 WHERE id = $1")
         .bind(device_id as i64)
         .bind(user_id)
+        .bind(postcard::to_stdvec(cert)?)
+        .bind(&cert.device_name)
         .execute(pool)
-        .await?
-        .rows_affected()
+        .await?;
+    Ok(())
+}
+
+/// Signs a device out of its account (only if it is on `user_id`'s, when given).
+pub async fn detach_device(pool: &PgPool, device_id: u64, user_id: Option<i64>) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE devices SET user_id = NULL, cert = NULL
+         WHERE id = $1 AND user_id IS NOT NULL AND ($2::BIGINT IS NULL OR user_id = $2)",
+    )
+    .bind(device_id as i64)
+    .bind(user_id)
+    .execute(pool)
+    .await?
+    .rows_affected()
         == 1)
 }
 

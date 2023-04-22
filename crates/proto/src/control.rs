@@ -70,15 +70,25 @@ pub enum Request {
         key_bundle: EncryptedKeyBundle,
         recovery: RecoverySetup,
     },
-    /// Enrolls this machine. Requires a password login on this connection.
-    RegisterDevice {
+    /// Bringing a device online, step 1: asks for a challenge for this device key.
+    DeviceChallenge {
+        device_pk: [u8; 32],
+    },
+    /// Step 2: proves this connection holds the private device key (see
+    /// `somedesk_crypto::keys::DeviceKey::prove`). A key the server doesn't know yet is
+    /// registered under a new random ID, if the server lets devices without an account in.
+    /// Afterwards the device is online.
+    DeviceAuth {
+        name: String,
+        proof: [u8; 32],
+    },
+    /// Signs this (online) device in to the account logged in on this connection: `cert` binds
+    /// the device key to the account. The device keeps its ID.
+    AttachDevice {
         cert: DeviceCert,
     },
-    /// Authenticates as an enrolled device and marks it online.
-    TokenAuth {
-        device_id: u64,
-        token: [u8; 32],
-    },
+    /// Signs this device out of its account. It keeps its ID.
+    DetachDevice,
     /// Where this device can be reached directly (its local addresses; the server adds the
     /// public address it sees). With `allow_direct: false` no addresses are shared with peers
     /// and sessions always use the relay.
@@ -94,7 +104,7 @@ pub enum Request {
     Connect {
         device_id: u64,
     },
-    /// Removes one of the caller's own devices (also usable to sign out the current one).
+    /// Takes one of the account's devices off the account. It keeps its ID.
     RemoveDevice {
         device_id: u64,
     },
@@ -133,12 +143,13 @@ pub enum Response {
         recovery_bundle: EncryptedKeyBundle,
         message: Vec<u8>,
     },
-    DeviceRegistered {
-        device_id: u64,
-        token: [u8; 32],
+    DeviceChallenge {
+        /// The server's one-time X25519 key and nonce for this challenge.
+        server_pk: [u8; 32],
+        nonce: [u8; 32],
     },
+    /// The device is online.
     Authenticated {
-        username: String,
         device: DeviceInfo,
     },
     Devices(Vec<DeviceInfo>),
@@ -159,6 +170,8 @@ pub enum Event {
     IncomingSession { session_id: SessionId, from: DeviceInfo, candidates: Vec<SocketAddr> },
     /// Presence of one of our own devices changed.
     DevicePresence { device_id: u64, online: bool },
+    /// This device was taken off its account (from another device). It keeps its ID.
+    SignedOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +185,8 @@ pub enum ErrorCode {
     NotFound,
     Offline,
     RateLimited,
+    /// Not allowed, e.g. a server that only lets its accounts' devices in.
+    Forbidden,
     Internal,
 }
 
@@ -252,13 +267,31 @@ impl DeviceCert {
     }
 }
 
+/// Who a device is: its key, the name it gives itself and, when it is signed in to an account,
+/// the account's certificate for it. This is what each side presents in the Noise handshake (and
+/// checks there itself); the server hands out the same for lookups.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceIdentity {
+    /// X25519 public key the device uses in Noise handshakes.
+    pub device_pk: [u8; 32],
+    /// Chosen by the device; only meaningful together with its ID or account.
+    pub name: String,
+    /// The account's certificate for `device_pk`, if the device is signed in to one.
+    pub account: Option<DeviceCert>,
+}
+
+impl DeviceIdentity {
+    /// The account the device is signed in to.
+    pub fn username(&self) -> Option<&str> {
+        self.account.as_ref().map(|c| c.username.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceInfo {
     pub device_id: u64,
-    pub username: String,
-    pub name: String,
     pub online: bool,
-    pub cert: DeviceCert,
+    pub identity: DeviceIdentity,
 }
 
 /// First frame on every direct (peer-to-peer) stream, naming the session it belongs to.

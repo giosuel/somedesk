@@ -15,6 +15,10 @@ struct Args {
     /// Directory for the TLS certificate and key.
     #[arg(long, env = "SOMEDESK_DATA_DIR", default_value = "./data")]
     data_dir: PathBuf,
+    /// Only let in devices signed in to one of this server's accounts. By default any device
+    /// can come online and get an ID, with or without an account.
+    #[arg(long, env = "SOMEDESK_ACCOUNTS_ONLY")]
+    accounts_only: bool,
 }
 
 #[tokio::main]
@@ -27,6 +31,7 @@ async fn main() -> anyhow::Result<()> {
         listen: args.listen,
         database_url: args.database_url,
         data_dir: args.data_dir,
+        open: !args.accounts_only,
         relay_tap: None,
     })
     .await?;

@@ -45,7 +45,7 @@ fn prologue(session_id: &SessionId) -> Vec<u8> {
 }
 
 /// Viewer side: asks the server for a session to `device_id` and runs the Noise handshake.
-/// The returned channel's `peer` is the host's verified certificate.
+/// The returned channel's `peer` is the host's verified identity.
 pub async fn connect(conn: &ServerConn, creds: &DeviceCredentials, device_id: u64) -> Result<(Channel, DeviceInfo)> {
     connect_routed(conn, creds, device_id).await.map(|(ch, host, _)| (ch, host))
 }
@@ -57,11 +57,11 @@ pub async fn connect_routed(
     device_id: u64,
 ) -> Result<(Channel, DeviceInfo, Route)> {
     let (session_id, host, candidates) = conn.request_session(device_id).await?;
-    let (prologue, key) = (prologue(&session_id), creds.device_key());
+    let (prologue, key, own) = (prologue(&session_id), creds.device_key(), creds.identity());
 
     if !candidates.is_empty() && conn.direct().allowed() {
         if let Some((send, recv)) = find_direct_path(conn, session_id, &candidates).await {
-            let fut = channel::initiate(recv, send, &prologue, &key, &creds.cert, Some(&host.cert.device_pk));
+            let fut = channel::initiate(recv, send, &prologue, &key, &own, Some(&host.identity.device_pk));
             match tokio::time::timeout(HANDSHAKE_TIMEOUT, fut).await {
                 Ok(Ok(ch)) => {
                     tracing::info!(device_id, "direct connection established");
@@ -74,7 +74,7 @@ pub async fn connect_routed(
     }
 
     let (send, recv) = conn.open_relay(session_id).await?;
-    let fut = channel::initiate(recv, send, &prologue, &key, &creds.cert, Some(&host.cert.device_pk));
+    let fut = channel::initiate(recv, send, &prologue, &key, &own, Some(&host.identity.device_pk));
     let ch = tokio::time::timeout(HANDSHAKE_TIMEOUT, fut)
         .await
         .map_err(|_| ClientError::Other("the remote device did not answer".into()))??;
@@ -137,11 +137,11 @@ pub async fn accept_routed(
     };
 
     let respond = |pair: StreamPair, route: Route| {
-        let (prologue, key, cert) = (prologue.clone(), key.clone(), creds.cert.clone());
-        let expected = from.cert.device_pk;
+        let (prologue, key, own) = (prologue.clone(), key.clone(), creds.identity());
+        let expected = from.identity.device_pk;
         async move {
             let (send, recv) = pair;
-            (route, channel::respond(recv, send, &prologue, &key, &cert, Some(&expected)).await)
+            (route, channel::respond(recv, send, &prologue, &key, &own, Some(&expected)).await)
         }
     };
     let mut handshakes = FuturesUnordered::new();

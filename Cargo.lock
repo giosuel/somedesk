@@ -5825,6 +5825,7 @@ dependencies = [
  "sha2",
  "snow",
  "somedesk-proto",
+ "subtle",
  "thiserror 2.0.21",
  "tokio",
  "x25519-dalek",

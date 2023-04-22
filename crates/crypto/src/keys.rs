@@ -136,7 +136,58 @@ impl DeviceKey {
     }
 }
 
-/// Human-comparable fingerprint of an identity key, e.g. `1A2B 3C4D 5E6F 7A8B 9C0D`.
+const DEVICE_PROOF_INFO: &[u8] = b"somedesk device proof v1";
+
+impl DeviceKey {
+    /// Proves to the server that this device holds its private key: a key derived from a
+    /// Diffie-Hellman exchange with the server's one-time key in [`DeviceChallenge`], bound to
+    /// both keys and the nonce.
+    pub fn prove(&self, server_pk: &[u8; 32], nonce: &[u8; 32]) -> [u8; 32] {
+        let secret = x25519_dalek::StaticSecret::from(*self.0);
+        let shared = secret.diffie_hellman(&x25519_dalek::PublicKey::from(*server_pk));
+        device_proof(shared.as_bytes(), &self.public(), server_pk, nonce)
+    }
+}
+
+fn device_proof(shared: &[u8; 32], device_pk: &[u8; 32], server_pk: &[u8; 32], nonce: &[u8; 32]) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(Some(nonce), shared);
+    let mut out = [0u8; 32];
+    hk.expand_multi_info(&[DEVICE_PROOF_INFO, device_pk, server_pk], &mut out)
+        .expect("32 bytes is a valid HKDF length");
+    out
+}
+
+/// The server's side of [`DeviceKey::prove`]: a one-time key and nonce, and the check.
+pub struct DeviceChallenge {
+    secret: x25519_dalek::StaticSecret,
+    pub device_pk: [u8; 32],
+    pub server_pk: [u8; 32],
+    pub nonce: [u8; 32],
+}
+
+impl DeviceChallenge {
+    pub fn new(device_pk: [u8; 32]) -> Self {
+        let secret = x25519_dalek::StaticSecret::random_from_rng(OsRng);
+        let server_pk = x25519_dalek::PublicKey::from(&secret).to_bytes();
+        let mut nonce = [0u8; 32];
+        OsRng.fill_bytes(&mut nonce);
+        Self { secret, device_pk, server_pk, nonce }
+    }
+
+    /// Whether `proof` shows possession of the private key of `device_pk`.
+    pub fn verify(&self, proof: &[u8; 32]) -> bool {
+        let shared = self.secret.diffie_hellman(&x25519_dalek::PublicKey::from(self.device_pk));
+        // A low-order "public key" would make the shared secret predictable.
+        if !shared.was_contributory() {
+            return false;
+        }
+        let expected = device_proof(shared.as_bytes(), &self.device_pk, &self.server_pk, &self.nonce);
+        subtle::ConstantTimeEq::ct_eq(expected.as_slice(), proof.as_slice()).into()
+    }
+}
+
+/// Human-comparable fingerprint of a public key (an account's identity key or a device key),
+/// e.g. `1A2B 3C4D 5E6F 7A8B 9C0D`.
 pub fn fingerprint(identity_pk: &[u8; 32]) -> String {
     let digest = Sha256::digest([b"somedesk fingerprint v1".as_slice(), identity_pk].concat());
     hex::encode_upper(&digest[..10])
@@ -152,6 +203,19 @@ mod tests {
     use super::*;
 
     const EXPORT: [u8; 64] = [7u8; 64];
+
+    #[test]
+    fn device_proofs() {
+        let key = DeviceKey::generate();
+        let challenge = DeviceChallenge::new(key.public());
+        assert!(challenge.verify(&key.prove(&challenge.server_pk, &challenge.nonce)));
+        let other = DeviceKey::generate();
+        assert!(!challenge.verify(&other.prove(&challenge.server_pk, &challenge.nonce)), "another key");
+        let again = DeviceChallenge::new(key.public());
+        assert!(!again.verify(&key.prove(&challenge.server_pk, &challenge.nonce)), "an old proof");
+        let zero = DeviceChallenge::new([0u8; 32]);
+        assert!(!zero.verify(&[0u8; 32]), "a low-order key");
+    }
 
     #[test]
     fn bundle_roundtrip() {

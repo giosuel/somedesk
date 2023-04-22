@@ -22,3 +22,4 @@ sha2.workspace = true
 snow.workspace = true
 zeroize.workspace = true
 hex.workspace = true
+subtle = "2"

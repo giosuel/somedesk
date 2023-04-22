@@ -56,8 +56,8 @@ pub async fn serve(
     settings: HostSettings,
     mut stop: watch::Receiver<bool>,
 ) -> Result<HostStats> {
-    let Channel { mut sender, mut receiver, peer } = ch;
-    tracing::info!(peer = %peer.username, device = %peer.device_name, "session accepted");
+    let Channel { mut sender, mut receiver, peer, .. } = ch;
+    tracing::info!(peer = %peer.name, account = ?peer.username(), "session accepted");
     sender.send(&SessionMsg::Accept).await?;
     if settings.view_only {
         sender.send(&SessionMsg::ViewOnly).await?;
