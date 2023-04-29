@@ -4,9 +4,11 @@
 //! * [`session`] — messages exchanged end-to-end between two clients. These are only
 //!   ever sent inside the Noise channel; the server never sees them.
 //! * [`frame`] — length-prefixed framing used on every QUIC stream.
+//! * [`org`] — organisations' signed access policies and enrolled devices.
 
 pub mod control;
 pub mod frame;
+pub mod org;
 pub mod session;
 
 /// ALPN of direct QUIC connections between two devices.

@@ -27,14 +27,20 @@ impl opaque_ke::CipherSuite for Suite {
 const SERVER_IDENTITY: &[u8] = b"somedesk";
 
 fn identifiers(username: &str) -> Identifiers<'_> {
-    Identifiers { client: Some(username.as_bytes()), server: Some(SERVER_IDENTITY) }
+    identifiers_for(username, SERVER_IDENTITY)
+}
+
+/// The client and server names mixed into a transcript. Unattended access names the host
+/// differently from the server, so a run against one can't stand in for the other.
+pub(crate) fn identifiers_for<'a>(client: &'a str, server: &'a [u8]) -> Identifiers<'a> {
+    Identifiers { client: Some(client.as_bytes()), server: Some(server) }
 }
 
 /// Key that only a holder of the password can derive (64 bytes).
 pub type ExportKey = Zeroizing<Vec<u8>>;
 
 /// Long-term OPAQUE server keys. Must be persisted; losing it invalidates all passwords.
-pub struct ServerSetup(opaque_ke::ServerSetup<Suite>);
+pub struct ServerSetup(pub(crate) opaque_ke::ServerSetup<Suite>);
 
 impl ServerSetup {
     pub fn generate() -> Self {
@@ -51,8 +57,8 @@ impl ServerSetup {
 // ---------------------------------------------------------------- client side
 
 pub struct ClientRegistrationState {
-    state: ClientRegistration<Suite>,
-    username: String,
+    pub(crate) state: ClientRegistration<Suite>,
+    pub(crate) username: String,
 }
 
 /// Registration step 1. Returns the message for the server.
@@ -84,8 +90,8 @@ pub fn client_register_finish(
 }
 
 pub struct ClientLoginState {
-    state: ClientLogin<Suite>,
-    username: String,
+    pub(crate) state: ClientLogin<Suite>,
+    pub(crate) username: String,
 }
 
 /// Login step 1.
@@ -125,7 +131,7 @@ pub fn server_register_finish(upload: &[u8]) -> Result<Vec<u8>, CryptoError> {
     Ok(ServerRegistration::<Suite>::finish(up).serialize().to_vec())
 }
 
-pub struct ServerLoginState(ServerLogin<Suite>);
+pub struct ServerLoginState(pub(crate) ServerLogin<Suite>);
 
 /// Login step 1 on the server. Pass `None` for an unknown user: the protocol then continues
 /// with a fake record so the response does not reveal whether the account exists.

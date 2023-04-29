@@ -70,6 +70,22 @@ impl IdentityKey {
         Ok(Self(key))
     }
 
+    /// A key for `purpose`, derived from the identity key: only the account's own (signed-in)
+    /// devices can derive it.
+    pub(crate) fn derive(&self, purpose: &[u8]) -> Zeroizing<[u8; 32]> {
+        let secret = Zeroizing::new(self.0.to_bytes());
+        let hk = Hkdf::<Sha256>::new(None, secret.as_slice());
+        let mut out = Zeroizing::new([0u8; 32]);
+        hk.expand(purpose, out.as_mut_slice()).expect("32 bytes is a valid HKDF length");
+        out
+    }
+
+    /// The X25519 form of the private key, for opening what was sealed to the identity key
+    /// (see [`crate::org::seal_for`]).
+    pub(crate) fn montgomery_secret(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(self.0.to_scalar_bytes())
+    }
+
     /// Issues a certificate binding `device_pk` to this identity.
     pub fn certify_device(
         &self,

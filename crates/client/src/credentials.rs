@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use somedesk_crypto::keys::DeviceKey;
 use somedesk_proto::control::{DeviceCert, DeviceIdentity};
+use somedesk_proto::org::OrgDeviceCert;
 use std::path::Path;
 
 /// Everything a device needs to come online. Created on the first start; the ID stays the same
@@ -21,6 +22,9 @@ pub struct DeviceCredentials {
     /// The account this device is signed in to.
     #[serde(default)]
     pub account: Option<AccountCredentials>,
+    /// The organisation's certificate, for a device a service worker enrolled.
+    #[serde(default)]
+    pub org: Option<OrgDeviceCert>,
 }
 
 /// A device's sign-in to an account: the account's certificate for the device key.
@@ -29,6 +33,10 @@ pub struct AccountCredentials {
     pub username: String,
     pub identity_pk: [u8; 32],
     pub cert: DeviceCert,
+    /// The key of the account's vault (address book and saved passwords), so the device can
+    /// sync it without the password.
+    #[serde(default)]
+    pub vault_key: Option<[u8; 32]>,
 }
 
 impl std::fmt::Debug for DeviceCredentials {
@@ -65,6 +73,7 @@ impl DeviceCredentials {
             device_pk: self.device_key().public(),
             name: self.device_name.clone(),
             account: self.account.as_ref().map(|a| a.cert.clone()),
+            org: self.org.clone(),
         }
     }
 
@@ -88,7 +97,13 @@ impl DeviceCredentials {
             device_id: old.device_id,
             device_secret: old.device_secret,
             device_name: old.cert.device_name.clone(),
-            account: Some(AccountCredentials { username: old.username, identity_pk: old.identity_pk, cert: old.cert }),
+            account: Some(AccountCredentials {
+                username: old.username,
+                identity_pk: old.identity_pk,
+                cert: old.cert,
+                vault_key: None,
+            }),
+            org: None,
         }))
     }
 

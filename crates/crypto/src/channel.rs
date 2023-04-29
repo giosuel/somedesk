@@ -80,6 +80,12 @@ fn check_peer(
             return Err(ChannelError::BadPeer("account certificate is for another device".into()));
         }
     }
+    if let Some(cert) = &identity.org {
+        crate::org::verify_device_cert(cert).map_err(|e| ChannelError::BadPeer(e.to_string()))?;
+        if cert.device_pk != identity.device_pk {
+            return Err(ChannelError::BadPeer("organisation certificate is for another device".into()));
+        }
+    }
     if let Some(expected) = expected {
         if expected != &identity.device_pk {
             return Err(ChannelError::BadPeer("peer is not the expected device".into()));
@@ -285,13 +291,13 @@ mod tests {
         let account = IdentityKey::generate();
         let key = DeviceKey::generate();
         let cert = account.certify_device(user, key.public(), "pc", 0);
-        Party { id: DeviceIdentity { device_pk: key.public(), name: "pc".into(), account: Some(cert) }, key }
+        Party { id: DeviceIdentity { device_pk: key.public(), name: "pc".into(), account: Some(cert), org: None }, key }
     }
 
     /// A device without an account.
     fn anonymous(name: &str) -> Party {
         let key = DeviceKey::generate();
-        Party { id: DeviceIdentity { device_pk: key.public(), name: name.into(), account: None }, key }
+        Party { id: DeviceIdentity { device_pk: key.public(), name: name.into(), account: None, org: None }, key }
     }
 
     type Hs = Handshaked<ReadHalf<DuplexStream>, WriteHalf<DuplexStream>>;
@@ -333,7 +339,12 @@ mod tests {
         // Mallory's own key, but bob's account certificate (for bob's device key).
         let key = DeviceKey::generate();
         let mallory = Party {
-            id: DeviceIdentity { device_pk: key.public(), name: "pc".into(), account: bob.id.account.clone() },
+            id: DeviceIdentity {
+                device_pk: key.public(),
+                name: "pc".into(),
+                account: bob.id.account.clone(),
+                org: None,
+            },
             key,
         };
         let (x, y) = duplex(1 << 16);

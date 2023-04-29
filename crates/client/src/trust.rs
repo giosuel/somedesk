@@ -213,6 +213,7 @@ mod tests {
                 created_at: 0,
                 signature: vec![],
             }),
+            org: None,
         }
     }
 

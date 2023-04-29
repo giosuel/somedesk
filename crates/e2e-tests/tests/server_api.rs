@@ -194,14 +194,14 @@ async fn devices_must_prove_their_key() {
     let (conn, _) = ts.connect().await;
     // No challenge asked for.
     assert_eq!(
-        code(conn.request(Request::DeviceAuth { name: "x".into(), proof: [0; 32] }).await),
+        code(conn.request(Request::DeviceAuth { name: "x".into(), proof: [0; 32], org: None }).await),
         ErrorCode::BadRequest
     );
     // Alice's public key, without her private key.
     let public = alice.creds.device_key().public();
     conn.request(Request::DeviceChallenge { device_pk: public }).await.unwrap();
     assert_eq!(
-        code(conn.request(Request::DeviceAuth { name: "x".into(), proof: [7; 32] }).await),
+        code(conn.request(Request::DeviceAuth { name: "x".into(), proof: [7; 32], org: None }).await),
         ErrorCode::AuthFailed
     );
     // The real key works from a fresh connection (e.g. after a restart), with the same ID.

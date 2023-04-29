@@ -4,8 +4,10 @@ use crate::{db, relay, Online, Shared};
 use somedesk_crypto::keys::{verify_device_cert, DeviceChallenge};
 use somedesk_crypto::opaque::{self, ServerLoginState};
 use somedesk_crypto::recovery;
+use somedesk_crypto::totp::{self, TotpSecret};
 use somedesk_proto::control::*;
 use somedesk_proto::frame::{read_msg, write_msg};
+use somedesk_proto::org::{OrgDeviceCert, OrgPolicy};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -17,6 +19,10 @@ const AUTH_LIMIT: u32 = 20;
 const MAX_DEVICE_NAME: usize = 64;
 /// Local addresses a device may announce for direct connections.
 const MAX_CANDIDATES: usize = 8;
+/// Largest encrypted vault (address book and saved passwords).
+const MAX_VAULT: usize = 1 << 20;
+/// Largest organisation policy.
+const MAX_POLICY: usize = 1 << 20;
 
 /// Password-login progress on this connection.
 enum Login {
@@ -41,6 +47,10 @@ enum Login {
         username: String,
         identity_pk: [u8; 32],
     },
+    /// Password right; waiting for the code from the authenticator app.
+    TotpPending {
+        user: Box<db::UserRow>,
+    },
     User {
         user_id: i64,
         username: String,
@@ -60,6 +70,8 @@ struct Ctx {
     challenge: Option<DeviceChallenge>,
     /// The device online on this connection.
     device: Option<u64>,
+    /// A two-factor secret being set up, until it is confirmed with a code.
+    totp_pending: Option<TotpSecret>,
     /// The same, read by the relay stream acceptor.
     device_slot: Arc<Mutex<Option<u64>>>,
 }
@@ -101,8 +113,18 @@ pub async fn handle(shared: Arc<Shared>, incoming: quinn::Incoming) {
         })
     };
 
-    let mut ctx =
-        Ctx { shared, conn_id, ip, remote, tx, login: Login::None, challenge: None, device: None, device_slot };
+    let mut ctx = Ctx {
+        shared,
+        conn_id,
+        ip,
+        remote,
+        tx,
+        login: Login::None,
+        challenge: None,
+        device: None,
+        totp_pending: None,
+        device_slot,
+    };
     loop {
         let frame: ClientFrame = match read_msg(&mut recv).await {
             Ok(Some(f)) => f,
@@ -172,6 +194,7 @@ impl Ctx {
                 device_pk: d.device_pk,
                 name: d.name.clone(),
                 account: d.account.as_ref().map(|a| a.cert.clone()),
+                org: d.org.as_ref().map(|(_, cert)| cert.clone()),
             },
         }
     }
@@ -274,13 +297,23 @@ impl Ctx {
                     tracing::info!(%username, ip = %self.ip, "failed login");
                     return Err(err(ErrorCode::AuthFailed, "wrong username or password"));
                 };
-                db::audit(&db, Some(user.id), None, "login", Some(&self.ip.to_string())).await;
-                self.login = Login::User { user_id: user.id, username, identity_pk: user.identity_pk };
-                Ok(Response::LoginFinish {
-                    identity_pk: user.identity_pk,
-                    has_recovery: user.recovery.is_some(),
-                    key_bundle: user.key_bundle,
-                })
+                if user.totp_secret.is_some() {
+                    self.login = Login::TotpPending { user };
+                    return Ok(Response::TotpRequired);
+                }
+                Ok(self.logged_in(*user).await)
+            }
+
+            Request::LoginTotp { code } => {
+                let Login::TotpPending { user } = std::mem::replace(&mut self.login, Login::None) else {
+                    return Err(err(ErrorCode::BadRequest, "login not started"));
+                };
+                self.limit("totp", &user.username)?;
+                if !self.check_totp(&user, &code).await? {
+                    tracing::info!(username = %user.username, ip = %self.ip, "wrong two-factor code");
+                    return Err(err(ErrorCode::AuthFailed, "wrong code"));
+                }
+                Ok(self.logged_in(*user).await)
             }
 
             Request::SetRecovery { recovery } => {
@@ -352,19 +385,27 @@ impl Ctx {
                 Ok(Response::DeviceChallenge { server_pk, nonce })
             }
 
-            Request::DeviceAuth { name, proof } => {
+            Request::DeviceAuth { name, proof, org } => {
                 let Some(challenge) = self.challenge.take() else {
                     return Err(err(ErrorCode::BadRequest, "ask for a challenge first"));
                 };
                 if !challenge.verify(&proof) {
                     return Err(err(ErrorCode::AuthFailed, "the device could not prove its key"));
                 }
-                let name = name.trim().to_owned();
+                let name = match &org {
+                    Some(cert) => cert.device_name.trim().to_owned(),
+                    None => name.trim().to_owned(),
+                };
                 check_device_name(&name)?;
-                let signed_in = matches!(self.login, Login::User { .. });
-                let device = match db::get_device_by_key(&db, &challenge.device_pk).await.map_err(internal)? {
+                let existing = db::get_device_by_key(&db, &challenge.device_pk).await.map_err(internal)?;
+                if let Some(cert) = &org {
+                    let enrolled = existing.as_ref().and_then(|d| d.org.as_ref()).is_some_and(|(_, c)| c == cert);
+                    self.check_org_cert(cert, &challenge.device_pk, !enrolled).await?;
+                }
+                let signed_in = matches!(self.login, Login::User { .. }) || org.is_some();
+                let device = match existing {
                     Some(d) => {
-                        if !self.shared.open && d.account.is_none() && !signed_in {
+                        if !self.shared.open && d.account.is_none() && d.org.is_none() && !signed_in {
                             return Err(closed_server());
                         }
                         // Devices on an account are named by their certificate.
@@ -381,6 +422,17 @@ impl Ctx {
                         db::audit(&db, None, Some(id), "device_registered", Some(&name)).await;
                         db::get_device(&db, id).await.map_err(internal)?.ok_or_else(|| internal("device vanished"))?
                     }
+                };
+                let device = match &org {
+                    Some(cert) if device.org.as_ref().is_none_or(|(_, c)| c != cert) => {
+                        db::set_device_org(&db, device.id, cert).await.map_err(internal)?;
+                        db::audit(&db, None, Some(device.id), "device_enrolled", Some(&cert.org_id.to_string())).await;
+                        db::get_device(&db, device.id)
+                            .await
+                            .map_err(internal)?
+                            .ok_or_else(|| internal("device vanished"))?
+                    }
+                    _ => device,
                 };
                 self.go_offline().await;
                 let user_id = device.account.as_ref().map(|a| a.user_id);
@@ -474,6 +526,9 @@ impl Ctx {
                 let Some(me) = db::get_device(&db, my_device).await.map_err(internal)? else {
                     return Err(err(ErrorCode::NotAuthenticated, "this device is unknown"));
                 };
+                if me.org.is_some() {
+                    return Err(err(ErrorCode::Forbidden, "devices enrolled by an organisation don't start sessions"));
+                }
                 let session_id = relay::new_session_id();
                 let host = self.shared.online.get(&device_id).map(|o| (o.tx.clone(), o.candidates.clone()));
                 let Some((host_tx, host_candidates)) = host else {
@@ -517,7 +572,284 @@ impl Ctx {
                 Ok(Response::Ok)
             }
 
+            Request::GetVault => {
+                let user_id = self.account().await?;
+                let (version, blob) = db::get_vault(&db, user_id).await.map_err(internal)?;
+                Ok(Response::Vault { version, blob })
+            }
+
+            Request::PutVault { base_version, blob } => {
+                let user_id = self.account().await?;
+                if blob.len() > MAX_VAULT {
+                    return Err(err(ErrorCode::BadRequest, "the vault is too large"));
+                }
+                match db::put_vault(&db, user_id, base_version, &blob).await.map_err(internal)? {
+                    Some(version) => Ok(Response::VaultSaved { version }),
+                    None => Err(err(ErrorCode::Conflict, "the vault changed in the meantime")),
+                }
+            }
+
+            Request::AccountInfo => {
+                let user = self.account_user().await?;
+                Ok(Response::Account { username: user.username, totp_enabled: user.totp_secret.is_some() })
+            }
+
+            Request::TotpBegin => {
+                let Login::User { .. } = &self.login else {
+                    return Err(err(ErrorCode::NotAuthenticated, "log in with your password first"));
+                };
+                let secret = TotpSecret::generate();
+                let bytes = secret.as_bytes().to_vec();
+                self.totp_pending = Some(secret);
+                Ok(Response::TotpSecret { secret: bytes })
+            }
+
+            Request::TotpEnable { code } => {
+                let Login::User { user_id, username, .. } = &self.login else {
+                    return Err(err(ErrorCode::NotAuthenticated, "log in with your password first"));
+                };
+                let (user_id, username) = (*user_id, username.clone());
+                self.limit("totp", &username)?;
+                let Some(secret) = self.totp_pending.as_ref() else {
+                    return Err(err(ErrorCode::BadRequest, "start setting up two-factor authentication first"));
+                };
+                let Some(step) = secret.verify(&code, totp::now(), None) else {
+                    return Err(err(ErrorCode::AuthFailed, "wrong code"));
+                };
+                db::set_totp(&db, user_id, Some(secret.as_bytes()), Some(step)).await.map_err(internal)?;
+                self.totp_pending = None;
+                db::audit(&db, Some(user_id), None, "totp_enabled", None).await;
+                self.broadcast_account_changed(user_id);
+                Ok(Response::Ok)
+            }
+
+            Request::TotpDisable { code } => {
+                let Login::User { user_id, .. } = &self.login else {
+                    return Err(err(ErrorCode::NotAuthenticated, "log in with your password first"));
+                };
+                let user_id = *user_id;
+                let user = db::get_user_by_id(&db, user_id)
+                    .await
+                    .map_err(internal)?
+                    .ok_or_else(|| internal("user vanished"))?;
+                self.limit("totp", &user.username)?;
+                if user.totp_secret.is_none() {
+                    return Ok(Response::Ok);
+                }
+                if !self.check_totp(&user, &code).await? {
+                    return Err(err(ErrorCode::AuthFailed, "wrong code"));
+                }
+                db::set_totp(&db, user_id, None, None).await.map_err(internal)?;
+                db::audit(&db, Some(user_id), None, "totp_disabled", None).await;
+                self.broadcast_account_changed(user_id);
+                Ok(Response::Ok)
+            }
+
+            Request::LookupUser { username } => {
+                if self.device.is_none() && !matches!(self.login, Login::User { .. }) {
+                    return Err(err(ErrorCode::NotAuthenticated, "bring the device online first"));
+                }
+                let username = normalize_username(&username)?;
+                self.limit("lookup_user", &username)?;
+                match db::get_user(&db, &username).await.map_err(internal)? {
+                    Some(u) => Ok(Response::User { username: u.username, identity_pk: u.identity_pk }),
+                    None => Err(err(ErrorCode::NotFound, "no account with this name")),
+                }
+            }
+
+            Request::CreateOrg { name, org_pk, sealed_key } => {
+                let Login::User { user_id, .. } = &self.login else {
+                    return Err(err(ErrorCode::NotAuthenticated, "log in with your password first"));
+                };
+                let user_id = *user_id;
+                let name = name.trim().to_owned();
+                if name.is_empty() || name.len() > MAX_DEVICE_NAME || sealed_key.len() > 256 {
+                    return Err(err(ErrorCode::BadRequest, "invalid organisation"));
+                }
+                let org_id = db::create_org(&db, &name, &org_pk, user_id, &sealed_key).await.map_err(internal)?;
+                db::audit(&db, Some(user_id), None, "org_created", Some(&org_id.to_string())).await;
+                Ok(Response::OrgCreated { org_id })
+            }
+
+            Request::ListOrgs => {
+                let user = self.account_user().await?;
+                let mut orgs = Vec::new();
+                for org in db::list_orgs(&db).await.map_err(internal)? {
+                    if org_role(&org, &user).is_none() {
+                        continue;
+                    }
+                    let sealed_key = db::get_org_key(&db, org.id, user.id).await.map_err(internal)?;
+                    orgs.push(OrgInfo {
+                        org_id: org.id,
+                        name: org.name,
+                        org_pk: org.org_pk,
+                        sealed_key,
+                        policy: org.policy,
+                    });
+                }
+                Ok(Response::Orgs(orgs))
+            }
+
+            Request::PutOrgPolicy { org_id, policy } => {
+                let user = self.account_user().await?;
+                let org = self.org(org_id).await?;
+                if org_role(&org, &user) != Some(true) {
+                    return Err(err(ErrorCode::Forbidden, "only the organisation's admins can change its policy"));
+                }
+                let decoded = somedesk_crypto::org::verify_policy(&policy, &org.org_pk)
+                    .map_err(|_| err(ErrorCode::BadRequest, "the policy is not signed with the organisation's key"))?;
+                if decoded.org_id != org_id || policy.policy.len() > MAX_POLICY {
+                    return Err(err(ErrorCode::BadRequest, "invalid policy"));
+                }
+                if !db::put_org_policy(&db, org_id, decoded.version, &policy).await.map_err(internal)? {
+                    return Err(err(ErrorCode::Conflict, "a newer policy exists"));
+                }
+                let detail = format!("{org_id} v{}", decoded.version);
+                db::audit(&db, Some(user.id), None, "org_policy", Some(&detail)).await;
+                self.broadcast_org_changed(org_id, &decoded).await;
+                Ok(Response::Ok)
+            }
+
+            Request::ShareOrgKey { org_id, username, sealed_key } => {
+                let user = self.account_user().await?;
+                let org = self.org(org_id).await?;
+                if org_role(&org, &user) != Some(true) {
+                    return Err(err(ErrorCode::Forbidden, "only the organisation's admins can share its key"));
+                }
+                let username = normalize_username(&username)?;
+                let Some(target) = db::get_user(&db, &username).await.map_err(internal)? else {
+                    return Err(err(ErrorCode::NotFound, "no account with this name"));
+                };
+                if sealed_key.len() > 256 {
+                    return Err(err(ErrorCode::BadRequest, "invalid key"));
+                }
+                db::put_org_key(&db, org_id, target.id, &sealed_key).await.map_err(internal)?;
+                Ok(Response::Ok)
+            }
+
+            Request::GetOrgPolicy { org_id } => {
+                let org = self.org(org_id).await?;
+                if !self.may_read_org(&org).await? {
+                    return Err(err(ErrorCode::Forbidden, "not part of this organisation"));
+                }
+                Ok(Response::OrgPolicy(org.policy))
+            }
+
+            Request::ListOrgDevices { org_id } => {
+                let user = self.account_user().await?;
+                let org = self.org(org_id).await?;
+                if org_role(&org, &user).is_none() {
+                    return Err(err(ErrorCode::Forbidden, "not part of this organisation"));
+                }
+                let devices = db::list_org_devices(&db, org_id).await.map_err(internal)?;
+                Ok(Response::Devices(devices.iter().map(|d| self.device_info(d)).collect()))
+            }
+
             Request::Ping => Ok(Response::Pong),
+        }
+    }
+
+    /// Finishes a password login (after the two-factor code, if the account has one).
+    async fn logged_in(&mut self, user: db::UserRow) -> Response {
+        db::audit(&self.shared.db, Some(user.id), None, "login", Some(&self.ip.to_string())).await;
+        self.login = Login::User { user_id: user.id, username: user.username.clone(), identity_pk: user.identity_pk };
+        Response::LoginFinish {
+            identity_pk: user.identity_pk,
+            has_recovery: user.recovery.is_some(),
+            key_bundle: user.key_bundle,
+        }
+    }
+
+    /// Checks a code from the account's authenticator app, each code only once.
+    async fn check_totp(&self, user: &db::UserRow, code: &str) -> Result<bool, ErrorInfo> {
+        let Some(secret) = user.totp_secret.as_deref() else { return Ok(false) };
+        let last = user.totp_last_step.map(|s| s as u64);
+        match TotpSecret::from_bytes(secret).verify(code, totp::now(), last) {
+            Some(step) => db::use_totp_step(&self.shared.db, user.id, step).await.map_err(internal),
+            None => Ok(false),
+        }
+    }
+
+    /// The account of this connection, read fresh.
+    async fn account_user(&self) -> Result<db::UserRow, ErrorInfo> {
+        let user_id = self.account().await?;
+        db::get_user_by_id(&self.shared.db, user_id).await.map_err(internal)?.ok_or_else(|| internal("user vanished"))
+    }
+
+    async fn org(&self, org_id: u64) -> Result<db::OrgRow, ErrorInfo> {
+        db::get_org(&self.shared.db, org_id)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| err(ErrorCode::NotFound, "no such organisation"))
+    }
+
+    /// Checks an enrolled device's certificate: signed by a service worker of an organisation
+    /// with that key; for a new enrollment, also that the worker may still enroll devices.
+    async fn check_org_cert(
+        &self,
+        cert: &OrgDeviceCert,
+        device_pk: &[u8; 32],
+        enrolling: bool,
+    ) -> Result<(), ErrorInfo> {
+        let bad = || err(ErrorCode::Forbidden, "the enrollment key is not valid for this organisation");
+        somedesk_crypto::org::verify_device_cert(cert).map_err(|_| bad())?;
+        if &cert.device_pk != device_pk {
+            return Err(bad());
+        }
+        let org = db::get_org(&self.shared.db, cert.org_id).await.map_err(internal)?.ok_or_else(bad)?;
+        if org.org_pk != cert.org_pk {
+            return Err(bad());
+        }
+        if enrolling {
+            let policy = org
+                .policy
+                .as_ref()
+                .and_then(|p| somedesk_crypto::org::verify_policy(p, &org.org_pk).ok())
+                .ok_or_else(bad)?;
+            if !policy.worker_can_enroll(&cert.worker_pk, totp::now() as i64) {
+                return Err(err(ErrorCode::Forbidden, "this enrollment key was revoked or has expired"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Members read their organisation's policy, and so do its own devices.
+    async fn may_read_org(&self, org: &db::OrgRow) -> Result<bool, ErrorInfo> {
+        if let Some(device_id) = self.device {
+            let device = db::get_device(&self.shared.db, device_id).await.map_err(internal)?;
+            if device.is_some_and(|d| d.org.is_some_and(|(id, _)| id == org.id)) {
+                return Ok(true);
+            }
+        }
+        match self.account_user().await {
+            Ok(user) => Ok(org_role(org, &user).is_some()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    fn broadcast_account_changed(&self, user_id: i64) {
+        for entry in self.shared.online.iter() {
+            if entry.user_id == Some(user_id) {
+                let _ = entry.tx.send(ServerFrame::Event(Event::AccountChanged));
+            }
+        }
+    }
+
+    /// Tells the organisation's online devices and members about a new policy.
+    async fn broadcast_org_changed(&self, org_id: u64, policy: &OrgPolicy) {
+        let devices = db::list_org_devices(&self.shared.db, org_id).await.unwrap_or_default();
+        let mut members = Vec::new();
+        for m in &policy.members {
+            if let Ok(Some(u)) = db::get_user(&self.shared.db, &m.username).await {
+                members.push(u.id);
+            }
+        }
+        for entry in self.shared.online.iter() {
+            let is_device = devices.iter().any(|d| d.id == *entry.key());
+            let is_member = entry.user_id.is_some_and(|u| members.contains(&u));
+            if is_device || is_member {
+                let _ = entry.tx.send(ServerFrame::Event(Event::OrgPolicyChanged { org_id }));
+            }
         }
     }
 
@@ -539,6 +871,20 @@ impl Ctx {
             let _ = db::touch_device(&self.shared.db, device_id).await;
             tracing::info!(device_id, "device offline");
         }
+    }
+}
+
+/// The account's role in an organisation: `Some(true)` for admins, `Some(false)` for other
+/// members. Membership is what the organisation's signed policy says; before the first policy,
+/// its creator is its admin.
+fn org_role(org: &db::OrgRow, user: &db::UserRow) -> Option<bool> {
+    match &org.policy {
+        Some(signed) => {
+            let policy = somedesk_crypto::org::verify_policy(signed, &org.org_pk).ok()?;
+            let m = policy.member(&user.username).filter(|m| m.identity_pk == user.identity_pk)?;
+            Some(m.admin)
+        }
+        None => (org.created_by == Some(user.id)).then_some(true),
     }
 }
 

@@ -4,19 +4,27 @@
 //! * [`credentials`] — what a device persists after enrollment.
 //! * [`session`] — establishing the end-to-end encrypted channel to a peer device.
 //! * [`host`] / [`viewer`] — the two ends of a remote-control session.
-//! * [`trust`] — remembered peer identities and devices allowed to connect unattended.
+//! * [`trust`] — remembered device and account keys (trust on first use).
+//! * [`addressbook`] — the user's devices to connect to, synced through the account's vault.
+//! * [`wallet`] — passwords saved in the system's keychain.
+//! * [`access`] — who may get in: asking the person at the host, unattended access with the
+//!   host's password and authenticator code, the same account, or an organisation's policy.
 //! * [`clipboard`] / [`files`] — clipboard sharing and file transfer within a session.
 
+pub mod access;
+pub mod addressbook;
 pub mod clipboard;
 pub mod credentials;
 pub mod direct;
 pub mod files;
 pub mod host;
+pub mod org;
 pub mod server;
 pub mod session;
 mod tls;
 pub mod trust;
 pub mod viewer;
+pub mod wallet;
 
 use somedesk_proto::control::ErrorInfo;
 
@@ -57,6 +65,12 @@ pub enum ClientError {
     Channel(#[from] somedesk_crypto::channel::ChannelError),
     #[error("protocol error: {0}")]
     Protocol(&'static str),
+    /// The remote device turned the session down.
+    #[error("{0}")]
+    Rejected(String),
+    /// The password was right; the account wants the code from its authenticator app too.
+    #[error("enter the code from your authenticator app")]
+    TotpRequired,
     #[error("{0}")]
     Other(String),
 }
