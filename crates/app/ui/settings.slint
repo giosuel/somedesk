@@ -161,20 +161,17 @@ export component SettingsView inherits VerticalLayout {
             padding: 22px;
             spacing: 14px;
             SectionTitle { text: "Account"; }
-            if !root.signed-in: VerticalLayout {
-                spacing: 14px;
-                Text {
-                    text: "Optional. An account syncs your address book (end-to-end encrypted) and lets your own devices find and reach each other. Everything else works without one.";
-                    color: Theme.muted;
-                    font-size: 13px;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: 10px;
-                    alignment: start;
-                    PrimaryButton { height: 38px; text: "Sign in"; clicked => { root.sign-in(); } }
-                    GhostButton { button-height: 38px; text: "Create an account"; clicked => { root.create-account(); } }
-                }
+            if !root.signed-in: Text {
+                text: "Optional. An account syncs your address book (end-to-end encrypted) and lets your own devices find and reach each other. Everything else works without one.";
+                color: Theme.muted;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            if !root.signed-in: HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                PrimaryButton { height: 38px; text: "Sign in"; clicked => { root.sign-in(); } }
+                GhostButton { button-height: 38px; text: "Create an account"; clicked => { root.create-account(); } }
             }
             if root.signed-in: HorizontalLayout {
                 spacing: 14px;

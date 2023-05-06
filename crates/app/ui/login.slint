@@ -147,13 +147,17 @@ export component SetupForm inherits VerticalLayout {
     in property <bool> busy;
     in-out property <string> server;
     in-out property <string> name;
+    /// The phone: it reaches computers but isn't reached.
+    in property <bool> mobile;
     callback submit();
     spacing: 18px;
     VerticalLayout {
         spacing: 6px;
         Text { text: "Get started"; color: Theme.text; font-size: 24px; font-weight: 600; letter-spacing: -0.5px; }
         Text {
-            text: "This computer gets its own ID on your server. You don't need an account: anyone with the ID can ask to connect, and you decide.";
+            text: root.mobile
+                ? "This phone gets its own ID on your server, so you can reach your computers from it. You don't need an account."
+                : "This computer gets its own ID on your server. You don't need an account: anyone with the ID can ask to connect, and you decide.";
             color: Theme.muted;
             font-size: 14px;
             wrap: word-wrap;
@@ -161,8 +165,8 @@ export component SetupForm inherits VerticalLayout {
     }
     Field { label: "Server"; placeholder: "desk.example.com"; text <=> root.server; enabled: !root.busy; }
     Field {
-        label: "Name of this computer";
-        placeholder: "e.g. office-pc";
+        label: root.mobile ? "Name of this phone" : "Name of this computer";
+        placeholder: root.mobile ? "e.g. my-phone" : "e.g. office-pc";
         text <=> root.name;
         enabled: !root.busy;
         accepted => { root.submit(); }

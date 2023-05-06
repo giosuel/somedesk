@@ -46,6 +46,7 @@ export component MobileSetupPage inherits Rectangle {
                 }
             }
             SetupForm {
+                mobile: true;
                 server <=> root.server;
                 name <=> root.name;
                 error: root.error;
@@ -311,27 +312,28 @@ export component MobileHomePage inherits Rectangle {
                     HorizontalLayout {
                         spacing: 10px;
                         Heading {
+                            horizontal-stretch: 1;
                             title: "Address book";
                             subtitle: root.signed-in ? "Synced, end-to-end encrypted, with your account." : "Sign in to have it on all your devices.";
                         }
-                        PrimaryButton { y: 2px; height: 38px; icon: Icons.plus; clicked => { root.book-add(); } }
+                        PrimaryButton { y: 2px; width: 44px; height: 38px; icon: Icons.plus; clicked => { root.book-add(); } }
                     }
                     Card {
                         highlighted: root.tour-target == "book";
-                        if root.book.length == 0: Text {
-                            x: 18px;
-                            width: parent.width - 36px;
-                            text: "Nothing here yet. Add a computer by its ID.";
-                            color: Theme.subtle;
-                            font-size: 14px;
-                            wrap: word-wrap;
-                        }
-                        BookList {
+                        VerticalLayout {
                             padding: 6px;
-                            items: root.book;
-                            connect(id) => { root.connect(id); }
-                            edit(id) => { root.book-edit(id); }
-                            remove(id) => { root.book-remove(id); }
+                            if root.book.length == 0: Text {
+                                text: "Nothing here yet. Add a computer by its ID.";
+                                color: Theme.subtle;
+                                font-size: 14px;
+                                wrap: word-wrap;
+                            }
+                            BookList {
+                                items: root.book;
+                                connect(id) => { root.connect(id); }
+                                edit(id) => { root.book-edit(id); }
+                                remove(id) => { root.book-remove(id); }
+                            }
                         }
                     }
                 }
@@ -341,6 +343,7 @@ export component MobileHomePage inherits Rectangle {
                 content-height: Math.max(self.height, settings-content.preferred-height);
                 content-width: self.width;
                 settings-content := SettingsView {
+                    width: parent.width;
                     mobile: true;
                     can-host: false;
                     device-name <=> root.my-device-name;

@@ -103,6 +103,8 @@ pub enum Instance {
 pub struct InstanceListener {
     #[cfg(unix)]
     listener: std::os::unix::net::UnixListener,
+    #[cfg(not(unix))]
+    listener: std::net::TcpListener,
 }
 
 /// Claims `dir` for this process, or asks the instance that has it to show its window.
@@ -130,10 +132,25 @@ pub fn claim(dir: &Path) -> Instance {
             }
         }
     }
+    // No Unix sockets: a port on localhost, written to a file in the directory.
     #[cfg(not(unix))]
     {
-        let _ = dir;
-        Instance::First(InstanceListener {})
+        use std::io::Write;
+        use std::net::{TcpListener, TcpStream};
+        let port_file = dir.join("instance.port");
+        if let Some(port) = std::fs::read_to_string(&port_file).ok().and_then(|p| p.trim().parse::<u16>().ok()) {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            if let Ok(mut other) = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)) {
+                let _ = other.write_all(b"show\n");
+                return Instance::Other;
+            }
+        }
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port on localhost");
+        let _ = std::fs::create_dir_all(dir);
+        if let Ok(addr) = listener.local_addr() {
+            let _ = std::fs::write(&port_file, addr.port().to_string());
+        }
+        Instance::First(InstanceListener { listener })
     }
 }
 
@@ -152,6 +169,14 @@ impl InstanceListener {
             })
             .expect("spawning a thread");
         #[cfg(not(unix))]
-        let _ = show;
+        std::thread::Builder::new()
+            .name("somedesk-instance".into())
+            .spawn(move || {
+                for stream in self.listener.incoming().flatten() {
+                    drop(stream);
+                    show();
+                }
+            })
+            .expect("spawning a thread");
     }
 }

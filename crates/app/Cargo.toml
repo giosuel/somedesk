@@ -61,6 +61,7 @@ control your other computers, or let someone help you, through your own SomeDesk
 server. Works on X11 and Wayland (through the desktop portal)."""
 assets = [
     ["target/release/somedesk", "usr/bin/", "755"],
+    ["target/release/somedesk-agent", "usr/bin/", "755"],
     ["../../packaging/linux/ch.giosuel.SomeDesk.desktop", "usr/share/applications/", "644"],
     ["../../packaging/linux/ch.giosuel.SomeDesk.metainfo.xml", "usr/share/metainfo/", "644"],
     ["../../assets/brand/app-icon.svg", "usr/share/icons/hicolor/scalable/apps/ch.giosuel.SomeDesk.svg", "644"],

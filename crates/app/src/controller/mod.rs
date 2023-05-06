@@ -461,6 +461,7 @@ impl Controller {
     }
 
     /// Whether closing the window should leave the app running (in the tray).
+    #[cfg(not(target_os = "android"))]
     pub fn keep_running_in_background(&self) -> bool {
         somedesk_platform::can_share_screen() && self.0.state.lock().unwrap().settings.run_in_background
     }

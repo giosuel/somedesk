@@ -3,7 +3,8 @@
 
 #[cfg(not(target_os = "android"))]
 pub mod agent;
-#[cfg(not(target_os = "android"))]
+// On the phone, only `set_autostart` is reached (and says no).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 mod background;
 mod controller;
 mod keymap;

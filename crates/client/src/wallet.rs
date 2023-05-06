@@ -8,6 +8,7 @@
 //! async runtime's worker threads.
 
 /// The keychain's service name for SomeDesk's entries.
+#[cfg(not(target_os = "android"))]
 const SERVICE: &str = "SomeDesk";
 
 fn account(server: &str, device_id: u64) -> String {
