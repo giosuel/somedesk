@@ -1,0 +1,15 @@
+// The tray icon (Linux StatusNotifierItem, Windows notification area, macOS menu bar), so
+// SomeDesk can keep running with its window closed.
+
+export component AppTray inherits SystemTrayIcon {
+    icon: @image-url("../../../assets/brand/app-icon-64.png");
+    tooltip: "SomeDesk";
+    title: "SomeDesk";
+    callback show();
+    callback quit();
+    clicked => { root.show(); }
+    Menu {
+        MenuItem { title: "Show SomeDesk"; activated => { root.show(); } }
+        MenuItem { title: "Quit"; activated => { root.quit(); } }
+    }
+}

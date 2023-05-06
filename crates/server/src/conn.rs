@@ -23,6 +23,8 @@ const MAX_CANDIDATES: usize = 8;
 const MAX_VAULT: usize = 1 << 20;
 /// Largest organisation policy.
 const MAX_POLICY: usize = 1 << 20;
+/// How long after logging in with a code turning two-factor authentication off needs no other.
+const TOTP_FRESH: Duration = Duration::from_secs(600);
 
 /// Password-login progress on this connection.
 enum Login {
@@ -72,6 +74,9 @@ struct Ctx {
     device: Option<u64>,
     /// A two-factor secret being set up, until it is confirmed with a code.
     totp_pending: Option<TotpSecret>,
+    /// When this connection's login last checked a code from the authenticator app: turning
+    /// two-factor authentication off right after needs no second code.
+    totp_verified: Option<std::time::Instant>,
     /// The same, read by the relay stream acceptor.
     device_slot: Arc<Mutex<Option<u64>>>,
 }
@@ -123,6 +128,7 @@ pub async fn handle(shared: Arc<Shared>, incoming: quinn::Incoming) {
         challenge: None,
         device: None,
         totp_pending: None,
+        totp_verified: None,
         device_slot,
     };
     loop {
@@ -313,6 +319,7 @@ impl Ctx {
                     tracing::info!(username = %user.username, ip = %self.ip, "wrong two-factor code");
                     return Err(err(ErrorCode::AuthFailed, "wrong code"));
                 }
+                self.totp_verified = Some(std::time::Instant::now());
                 Ok(self.logged_in(*user).await)
             }
 
@@ -636,7 +643,8 @@ impl Ctx {
                 if user.totp_secret.is_none() {
                     return Ok(Response::Ok);
                 }
-                if !self.check_totp(&user, &code).await? {
+                let fresh = self.totp_verified.is_some_and(|t| t.elapsed() < TOTP_FRESH);
+                if !(fresh && code.is_empty()) && !self.check_totp(&user, &code).await? {
                     return Err(err(ErrorCode::AuthFailed, "wrong code"));
                 }
                 db::set_totp(&db, user_id, None, None).await.map_err(internal)?;

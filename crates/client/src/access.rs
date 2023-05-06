@@ -117,13 +117,13 @@ impl Unattended {
     }
 
     /// Turns unattended access on, once a code shows the authenticator app is set up.
-    pub fn confirm(&mut self, pending: PendingSetup, code: &str) -> Result<()> {
+    pub fn confirm(&mut self, pending: &PendingSetup, code: &str) -> Result<()> {
         let Some(step) = pending.secret.verify(code, totp::now(), None) else {
             return Err(ClientError::Other("wrong code: check the time on both devices and try again".into()));
         };
         self.config = Some(Config {
-            opaque_setup: pending.record.setup,
-            password_file: pending.record.password_file,
+            opaque_setup: pending.record.setup.clone(),
+            password_file: pending.record.password_file.clone(),
             totp_secret: pending.secret.as_bytes().to_vec(),
             last_step: Some(step),
             failures: 0,
@@ -277,8 +277,8 @@ mod tests {
         let pending = Unattended::begin(&[1; 32], "a long unattended password").unwrap();
         let code = pending.secret.code_at(totp::now() / 30);
         let pending2 = Unattended::begin(&[1; 32], "a long unattended password").unwrap();
-        assert!(s.confirm(pending2, "000000").is_err() || !s.enabled());
-        s.confirm(pending, &code).unwrap();
+        assert!(s.confirm(&pending2, "000000").is_err() || !s.enabled());
+        s.confirm(&pending, &code).unwrap();
         assert!(s.enabled());
         let again = Unattended::load(&s.path).unwrap();
         assert!(again.enabled());
@@ -291,7 +291,7 @@ mod tests {
         let mut s = store();
         let pending = Unattended::begin(&[1; 32], "a long unattended password").unwrap();
         let code = pending.secret.code_at(totp::now() / 30);
-        s.confirm(pending, &code).unwrap();
+        s.confirm(&pending, &code).unwrap();
         s.record_failure();
         s.record_failure();
         assert_eq!(s.locked_for(), 0, "a typo or two is fine");

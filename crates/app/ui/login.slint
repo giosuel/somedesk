@@ -1,5 +1,5 @@
 import { Theme, Icons } from "theme.slint";
-import { Logo, Icon, Field, PrimaryButton, LinkText } from "widgets.slint";
+import { Logo, Icon, Field, PrimaryButton, LinkText, ErrorBox } from "widgets.slint";
 
 component Point inherits HorizontalLayout {
     in property <string> text;
@@ -8,23 +8,26 @@ component Point inherits HorizontalLayout {
     Text { text: root.text; color: Theme.text-2; font-size: 14px; vertical-alignment: center; }
 }
 
-/// The sign-in, create-account and reset-password form.
+/// The sign-in, create-account and reset-password form (in the account dialog). An account is
+/// optional: the device works by its ID without one.
 export component LoginForm inherits VerticalLayout {
     in property <string> error;
     in property <bool> busy;
-    in-out property <string> server;
     in-out property <string> username;
     in-out property <string> password;
     in-out property <string> password2;
-    in-out property <string> device-name;
     in-out property <bool> create-mode;
     /// "Forgot password": reset the password with the recovery key.
     in-out property <bool> recover-mode;
     in-out property <string> recovery-key;
+    /// The account has two-factor authentication: ask for the code from the app.
+    in property <bool> need-code;
+    in-out property <string> code;
+    /// Shown instead of the sign-in title when the password confirms an action
+    /// (e.g. "Confirm with your password to turn on two-factor authentication.").
+    in property <string> purpose;
     callback submit();
-    in property <string> device-label: "Name of this computer";
-    in property <string> device-placeholder: "e.g. office-pc";
-    spacing: root.recover-mode ? 14px : 18px;
+    spacing: root.recover-mode ? 14px : 16px;
 
     if root.recover-mode: HorizontalLayout {
         alignment: start;
@@ -35,26 +38,31 @@ export component LoginForm inherits VerticalLayout {
     VerticalLayout {
         spacing: 6px;
         Text {
-            text: root.recover-mode ? "Reset your password" : root.create-mode ? "Create an account" : "Sign in";
+            text: root.purpose != "" ? "Confirm it's you" : root.recover-mode ? "Reset your password" : root.create-mode ? "Create an account" : "Sign in";
             color: Theme.text;
             font-size: 24px;
             font-weight: 600;
             letter-spacing: -0.5px;
         }
-        if root.recover-mode: Text {
+        if root.purpose != "": Text { text: root.purpose; color: Theme.muted; font-size: 14px; wrap: word-wrap; }
+        if root.recover-mode && root.purpose == "": Text {
             text: "Use the recovery key you saved when you created your account.";
             color: Theme.muted;
             font-size: 14px;
             wrap: word-wrap;
         }
-        if !root.recover-mode: HorizontalLayout {
+        if !root.recover-mode && root.purpose == "": Text {
+            text: root.create-mode
+                ? "Optional. It syncs your address book and lets your own devices reach each other."
+                : "Your devices and address book follow you to every computer you sign in on.";
+            color: Theme.muted;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        if !root.recover-mode && root.purpose == "": HorizontalLayout {
             alignment: start;
             spacing: 5px;
-            Text {
-                text: root.create-mode ? "Already have an account?" : "New here?";
-                color: Theme.muted;
-                font-size: 14px;
-            }
+            Text { text: root.create-mode ? "Already have an account?" : "New here?"; color: Theme.muted; font-size: 14px; }
             LinkText {
                 text: root.create-mode ? "Sign in" : "Create an account";
                 font-size: 14px;
@@ -63,8 +71,7 @@ export component LoginForm inherits VerticalLayout {
         }
     }
 
-    Field { label: "Server"; placeholder: "desk.example.com"; text <=> root.server; enabled: !root.busy; }
-    Field { label: "Username"; placeholder: "your-name"; text <=> root.username; enabled: !root.busy; }
+    Field { label: "Username"; placeholder: "your-name"; text <=> root.username; enabled: !root.busy && !root.need-code && root.purpose == ""; }
     if root.recover-mode: Field {
         label: "Recovery key";
         placeholder: "XXXX-XXXX-XXXX-…";
@@ -78,13 +85,13 @@ export component LoginForm inherits VerticalLayout {
         HorizontalLayout {
             Text { text: "Password"; color: Theme.muted; font-size: 13px; }
             Rectangle { horizontal-stretch: 1; }
-            if !root.create-mode: LinkText { text: "Forgot?"; clicked => { root.recover-mode = true; } }
+            if !root.create-mode && root.purpose == "": LinkText { text: "Forgot?"; clicked => { root.recover-mode = true; } }
         }
         Field {
             placeholder: root.create-mode ? "At least 8 characters" : "Your password";
             password: true;
             text <=> root.password;
-            enabled: !root.busy;
+            enabled: !root.busy && !root.need-code;
             accepted => { if (!root.create-mode) { root.submit(); } }
         }
     }
@@ -114,39 +121,67 @@ export component LoginForm inherits VerticalLayout {
             enabled: !root.busy;
         }
     }
-    Field { label: root.device-label; placeholder: root.device-placeholder; text <=> root.device-name; enabled: !root.busy; }
-
-    if root.error != "": Rectangle {
-        background: Theme.danger-soft;
-        border-radius: 11px;
-        HorizontalLayout {
-            padding: 12px;
-            spacing: 10px;
-            Icon { y: 1px; d: Icons.warning; size: 16px; color: Theme.danger-text; }
-            Text { text: root.error; color: Theme.danger-text; font-size: 13px; wrap: word-wrap; }
-        }
+    if root.need-code: Field {
+        label: "Code from your authenticator app";
+        placeholder: "123 456";
+        font-family: Theme.mono;
+        font-size: 20px;
+        text <=> root.code;
+        enabled: !root.busy;
+        accepted => { root.submit(); }
     }
+
+    if root.error != "": ErrorBox { text: root.error; }
     PrimaryButton {
         horizontal-stretch: 1;
         height: 46px;
-        text: root.recover-mode ? "Reset password" : root.create-mode ? "Create account" : "Sign in";
+        text: root.purpose != "" ? "Confirm" : root.recover-mode ? "Reset password" : root.create-mode ? "Create account" : "Sign in";
         busy: root.busy;
         clicked => { root.submit(); }
     }
 }
 
-export component LoginPage inherits Rectangle {
+/// The first start: which server, and what this computer is called. No account needed.
+export component SetupForm inherits VerticalLayout {
     in property <string> error;
     in property <bool> busy;
     in-out property <string> server;
-    in-out property <string> username;
-    in-out property <string> password;
-    in-out property <string> password2;
-    in-out property <string> device-name;
-    in-out property <bool> create-mode;
-    /// "Forgot password": reset the password with the recovery key.
-    in-out property <bool> recover-mode;
-    in-out property <string> recovery-key;
+    in-out property <string> name;
+    callback submit();
+    spacing: 18px;
+    VerticalLayout {
+        spacing: 6px;
+        Text { text: "Get started"; color: Theme.text; font-size: 24px; font-weight: 600; letter-spacing: -0.5px; }
+        Text {
+            text: "This computer gets its own ID on your server. You don't need an account: anyone with the ID can ask to connect, and you decide.";
+            color: Theme.muted;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+    }
+    Field { label: "Server"; placeholder: "desk.example.com"; text <=> root.server; enabled: !root.busy; }
+    Field {
+        label: "Name of this computer";
+        placeholder: "e.g. office-pc";
+        text <=> root.name;
+        enabled: !root.busy;
+        accepted => { root.submit(); }
+    }
+    if root.error != "": ErrorBox { text: root.error; }
+    PrimaryButton { horizontal-stretch: 1; height: 46px; text: "Continue"; busy: root.busy; clicked => { root.submit(); } }
+    Text {
+        text: "You can sign in to an account later, in Settings.";
+        color: Theme.subtle;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+}
+
+export component SetupPage inherits Rectangle {
+    in property <string> error;
+    in property <bool> busy;
+    in-out property <string> server;
+    in-out property <string> name;
     callback submit();
     background: Theme.bg;
 
@@ -168,7 +203,7 @@ export component LoginPage inherits Rectangle {
             }
             Rectangle { height: 18px; }
             Text {
-                text: "Remote access you host yourself. Sessions are encrypted end to end, and your password never leaves this device.";
+                text: "Remote access you host yourself. Sessions are encrypted end to end, and every feature is free, for good.";
                 color: Theme.muted;
                 font-size: 16px;
                 wrap: word-wrap;
@@ -177,11 +212,11 @@ export component LoginPage inherits Rectangle {
             VerticalLayout {
                 spacing: 14px;
                 Point { text: "The relay only ever sees ciphertext"; }
-                Point { text: "Zero-knowledge sign-in with a recovery key"; }
+                Point { text: "Connect by ID, no account needed"; }
                 Point { text: "For Linux, Windows, macOS and Android"; }
             }
             Rectangle { vertical-stretch: 1; }
-            Text { text: "Self-hosted · open protocol"; color: Theme.subtle; font-size: 12px; }
+            Text { text: "Self-hosted · open protocol · free forever"; color: Theme.subtle; font-size: 12px; }
         }
 
         // Form
@@ -189,18 +224,12 @@ export component LoginPage inherits Rectangle {
             width: 500px;
             background: #121418;
             Rectangle { x: 0; width: 1px; background: #1f2228; }
-            LoginForm {
+            SetupForm {
                 alignment: center;
                 padding-left: 60px;
                 padding-right: 60px;
                 server <=> root.server;
-                username <=> root.username;
-                password <=> root.password;
-                password2 <=> root.password2;
-                device-name <=> root.device-name;
-                create-mode <=> root.create-mode;
-                recover-mode <=> root.recover-mode;
-                recovery-key <=> root.recovery-key;
+                name <=> root.name;
                 error: root.error;
                 busy: root.busy;
                 submit => { root.submit(); }

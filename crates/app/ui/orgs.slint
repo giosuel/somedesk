@@ -1,0 +1,287 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon, Field, GhostButton, PrimaryButton, Card, SectionTitle, Pill, Divider, Checkbox, LinkText } from "widgets.slint";
+import { BookItem, BookList } from "book.slint";
+
+export struct OrgItem {
+    id: string,
+    name: string,
+    admin: bool,
+}
+
+export struct MemberItem {
+    username: string,
+    fingerprint: string,
+    admin: bool,
+    groups: string,
+}
+
+export struct RuleItem {
+    group: string,
+    device-group: string,
+}
+
+export struct DeviceGroupItem {
+    name: string,
+    devices: string,
+}
+
+export struct WorkerItem {
+    /// The worker's public key, hex (identifies it for revoking).
+    key: string,
+    name: string,
+    detail: string,
+    revoked: bool,
+}
+
+component Row inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> mono-detail;
+    in property <string> action;
+    in property <bool> action-enabled: true;
+    callback act();
+    height: Math.max(48px, rows.preferred-height + 16px);
+    border-radius: 10px;
+    background: ta.has-hover ? Theme.raised : transparent;
+    ta := TouchArea { }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 12px;
+        rows := VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text { text: root.title; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+            if root.detail != "": Text { text: root.detail; color: Theme.subtle; font-size: 12px; wrap: word-wrap; }
+            if root.mono-detail != "": Text { text: root.mono-detail; color: Theme.muted; font-size: 12px; font-family: Theme.mono; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        if root.action != "": GhostButton {
+            y: (parent.height - self.height) / 2;
+            button-height: 32px;
+            text: root.action;
+            fg: Theme.muted;
+            enabled: root.action-enabled;
+            clicked => { root.act(); }
+        }
+    }
+}
+
+component Section inherits Card {
+    in property <string> title;
+    in property <string> detail;
+    VerticalLayout {
+        padding: 18px;
+        spacing: 10px;
+        SectionTitle { text: root.title; }
+        if root.detail != "": Text { text: root.detail; color: Theme.subtle; font-size: 12px; wrap: word-wrap; }
+        @children
+    }
+}
+
+export component OrgsView inherits HorizontalLayout {
+    in property <[OrgItem]> orgs;
+    in property <string> selected;
+    in property <string> org-name;
+    in property <bool> org-admin;
+    in property <[BookItem]> devices;
+    in property <[MemberItem]> members;
+    in property <[RuleItem]> rules;
+    in property <[DeviceGroupItem]> device-groups;
+    in property <[WorkerItem]> workers;
+    in property <bool> busy;
+    callback select(string);
+    callback create(string);
+    callback connect(string);
+    callback add-member(string, string, bool);
+    callback remove-member(string);
+    callback add-rule(string, string);
+    callback remove-rule(string, string);
+    callback set-device-group(string, string);
+    callback new-worker(string);
+    callback revoke-worker(string);
+    padding: 32px;
+    padding-left: 36px;
+    padding-right: 36px;
+    spacing: 24px;
+
+    property <string> new-org;
+    property <string> member-name;
+    property <string> member-group: "Support";
+    property <bool> member-admin;
+    property <string> rule-group;
+    property <string> rule-devices: "*";
+    property <string> group-name;
+    property <string> group-ids;
+    property <string> worker-name;
+
+    // The organisations
+    VerticalLayout {
+        width: 260px;
+        spacing: 16px;
+        alignment: start;
+        VerticalLayout {
+            spacing: 6px;
+            Text { text: "Organisations"; color: Theme.text; font-size: 28px; font-weight: 600; letter-spacing: -0.6px; }
+            Text {
+                text: "Service workers enroll machines into an organisation; its admins decide which members may reach which machines.";
+                color: Theme.muted;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+        }
+        Card {
+            VerticalLayout {
+                padding: 8px;
+                for org in root.orgs: Rectangle {
+                    height: 48px;
+                    border-radius: 10px;
+                    background: root.selected == org.id ? Theme.raised : org-ta.has-hover ? #15171b : transparent;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 10px;
+                        Icon { y: (parent.height - self.height) / 2; d: Icons.building; size: 16px; color: root.selected == org.id ? Theme.accent : Theme.subtle; }
+                        Text { text: org.name; color: Theme.text; font-size: 14px; vertical-alignment: center; overflow: elide; }
+                        Rectangle { horizontal-stretch: 1; }
+                        if org.admin: Text { text: "Admin"; color: Theme.subtle; font-size: 11px; vertical-alignment: center; }
+                    }
+                    org-ta := TouchArea { mouse-cursor: pointer; clicked => { root.select(org.id); } }
+                }
+                if root.orgs.length == 0: Text {
+                    text: "You aren't in an organisation yet.";
+                    color: Theme.subtle;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+        Field { label: "New organisation"; placeholder: "e.g. ACME IT"; text <=> root.new-org; }
+        PrimaryButton {
+            height: 38px;
+            text: "Create";
+            icon: Icons.plus;
+            busy: root.busy;
+            enabled: root.new-org != "";
+            clicked => { root.create(root.new-org); root.new-org = ""; }
+        }
+    }
+
+    // The selected organisation
+    if root.selected == "": VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+        Text { text: "Choose an organisation, or create one."; color: Theme.subtle; font-size: 14px; horizontal-alignment: center; }
+    }
+    if root.selected != "": Flickable {
+        horizontal-stretch: 1;
+        content-width: self.width;
+        content-height: Math.max(self.height, org-detail.preferred-height);
+        org-detail := VerticalLayout {
+            width: parent.width;
+            spacing: 16px;
+            alignment: start;
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: root.org-name; color: Theme.text; font-size: 22px; font-weight: 600; vertical-alignment: center; }
+                if root.org-admin: Pill { y: (parent.height - self.height) / 2; text: "Admin"; }
+            }
+            Section {
+                title: "Devices";
+                detail: root.org-admin ? "Enrolled by service workers. They only accept members the rules below allow; nobody can reach them by ID alone." : "The organisation's machines you may reach.";
+                if root.devices.length == 0: Text { text: "No devices enrolled yet."; color: Theme.subtle; font-size: 13px; }
+                BookList { items: root.devices; compact: true; connect(id) => { root.connect(id); } }
+            }
+            if root.org-admin: Section {
+                title: "Members";
+                detail: "Each member signs in with their own account. Compare the fingerprint with them before relying on it.";
+                for m in root.members: Row {
+                    title: m.username + (m.admin ? " · admin" : "");
+                    detail: m.groups == "" ? "In no group" : "Groups: " + m.groups;
+                    mono-detail: m.fingerprint;
+                    action: "Remove";
+                    act => { root.remove-member(m.username); }
+                }
+                Divider { }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Field { horizontal-stretch: 2; label: "Username"; placeholder: "their-account"; text <=> root.member-name; }
+                    Field { horizontal-stretch: 1; label: "Group"; placeholder: "Support"; text <=> root.member-group; }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Checkbox { text: "Admin (can change all of this)"; checked <=> root.member-admin; }
+                    Rectangle { horizontal-stretch: 1; }
+                    GhostButton {
+                        button-height: 36px;
+                        text: "Add member";
+                        enabled: root.member-name != "" && root.member-group != "";
+                        clicked => { root.add-member(root.member-name, root.member-group, root.member-admin); root.member-name = ""; }
+                    }
+                }
+            }
+            if root.org-admin: Section {
+                title: "Who reaches which devices";
+                detail: "A group of members, and the device group they may reach (* for all). Access by rule is unattended.";
+                for r in root.rules: Row {
+                    title: r.group + "  →  " + (r.device-group == "*" ? "all devices" : r.device-group);
+                    action: "Remove";
+                    act => { root.remove-rule(r.group, r.device-group); }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Field { horizontal-stretch: 1; label: "Member group"; placeholder: "Support"; text <=> root.rule-group; }
+                    Field { horizontal-stretch: 1; label: "Device group"; placeholder: "* or a name"; text <=> root.rule-devices; }
+                    GhostButton {
+                        y: parent.height - self.height;
+                        button-height: 44px;
+                        text: "Add";
+                        enabled: root.rule-group != "" && root.rule-devices != "";
+                        clicked => { root.add-rule(root.rule-group, root.rule-devices); }
+                    }
+                }
+                Divider { }
+                for g in root.device-groups: Row {
+                    title: g.name;
+                    mono-detail: g.devices;
+                    action: "Edit";
+                    act => { root.group-name = g.name; root.group-ids = g.devices; }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Field { horizontal-stretch: 1; label: "Device group"; placeholder: "Office"; text <=> root.group-name; }
+                    Field { horizontal-stretch: 2; label: "Device IDs"; placeholder: "123 456 789, 987 654 321"; text <=> root.group-ids; }
+                    GhostButton {
+                        y: parent.height - self.height;
+                        button-height: 44px;
+                        text: "Save";
+                        enabled: root.group-name != "";
+                        clicked => { root.set-device-group(root.group-name, root.group-ids); }
+                    }
+                }
+            }
+            if root.org-admin: Section {
+                title: "Service workers";
+                detail: "A service worker's key enrolls machines: somedesk-agent enroll --server … --key …. Revoking it stops new enrollments; enrolled machines stay.";
+                for w in root.workers: Row {
+                    title: w.name + (w.revoked ? " · revoked" : "");
+                    detail: w.detail;
+                    action: w.revoked ? "" : "Revoke";
+                    act => { root.revoke-worker(w.key); }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Field { horizontal-stretch: 1; label: "Name"; placeholder: "e.g. office rollout"; text <=> root.worker-name; }
+                    GhostButton {
+                        y: parent.height - self.height;
+                        button-height: 44px;
+                        text: "Create key";
+                        icon: Icons.key;
+                        enabled: root.worker-name != "";
+                        clicked => { root.new-worker(root.worker-name); root.worker-name = ""; }
+                    }
+                }
+            }
+        }
+    }
+}

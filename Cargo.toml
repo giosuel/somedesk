@@ -51,19 +51,12 @@ dashmap = "6"
 # and tests optimize just these. (Optimizing every dependency made cold builds much slower.)
 [profile.dev.package]
 argon2.opt-level = 3
-blake2.opt-level = 3
-chacha20.opt-level = 3
 chacha20poly1305.opt-level = 3
-curve25519-dalek.opt-level = 3
 ed25519-dalek.opt-level = 3
 opaque-ke.opt-level = 3
 openh264.opt-level = 3
-openh264-sys2.opt-level = 3
-poly1305.opt-level = 3
-ring.opt-level = 3
 sha2.opt-level = 3
 snow.opt-level = 3
-voprf.opt-level = 3
 x25519-dalek.opt-level = 3
 
 # See third_party/i-slint-backend-winit/PATCHED.md.

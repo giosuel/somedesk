@@ -118,6 +118,8 @@ pub enum Request {
     TotpEnable {
         code: String,
     },
+    /// Turns it off, with a code (or with none, within minutes of logging in with one on this
+    /// connection).
     TotpDisable {
         code: String,
     },

@@ -98,7 +98,7 @@ fn set_up_unattended(host: &Device, path: &std::path::Path, password: &str) -> (
     let mut store = Unattended::load(path).unwrap();
     let pending = Unattended::begin(&host.creds.device_key().public(), password).unwrap();
     let secret = pending.secret.clone();
-    store.confirm(pending, &secret.code_at(totp::now() / 30)).unwrap();
+    store.confirm(&pending, &secret.code_at(totp::now() / 30)).unwrap();
     (store, secret)
 }
 

@@ -1,15 +1,18 @@
 import { Theme } from "theme.slint";
-import { LoginPage } from "login.slint";
-import { HomePage, DeviceItem, ContactItem, RecentItem, HomeView } from "home.slint";
+import { SetupPage } from "login.slint";
+import { HomePage, DeviceItem, RecentItem, HomeView, BookItem, OrgItem, MemberItem, RuleItem, DeviceGroupItem, WorkerItem } from "home.slint";
 import { Tour, TourSteps } from "tour.slint";
 import { SessionPage, MonitorChoice } from "session.slint";
-import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog } from "dialogs.slint";
+import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog,
+         AccountDialog, PasswordConnectDialog, EntryDialog, TwoFactorDialog, SecretDialog, SaveIn } from "dialogs.slint";
 import { Logo, Spinner } from "widgets.slint";
-import { MobileLoginPage, MobileHomePage, MobileSessionPage } from "mobile.slint";
+import { MobileSetupPage, MobileHomePage, MobileSessionPage } from "mobile.slint";
+export { AppTray } from "systray.slint";
+export { AgentBanner } from "agent.slint";
 
-export { DeviceItem, TransferItem, ContactItem, TrustLevel, MonitorChoice, RecentItem }
+export { DeviceItem, TransferItem, TrustLevel, MonitorChoice, RecentItem, BookItem, OrgItem, MemberItem, RuleItem, DeviceGroupItem, WorkerItem, SaveIn, HomeView }
 
-export enum Page { starting, login, home, session }
+export enum Page { starting, setup, home, session }
 
 export component AppWindow inherits Window {
     title: "SomeDesk";
@@ -25,22 +28,34 @@ export component AppWindow inherits Window {
 
     in-out property <Page> page: Page.starting;
 
-    // Login
-    in-out property <string> login-server;
-    in-out property <string> login-username;
-    in-out property <string> login-password;
-    in-out property <string> login-password2;
-    in-out property <string> login-device-name;
-    in-out property <bool> login-create-mode;
-    in-out property <bool> login-recover-mode;
-    in-out property <string> login-recovery-key;
-    in property <string> login-error;
-    in property <bool> login-busy;
-    callback login-submit();
+    // First start
+    in-out property <string> setup-server;
+    in-out property <string> setup-name;
+    in property <string> setup-error;
+    in property <bool> setup-busy;
+    callback setup-submit();
+
+    // Account dialog: signing in, creating an account, resetting the password, or confirming an
+    // action with the password.
+    in property <bool> account-visible;
+    in-out property <string> account-username;
+    in-out property <string> account-password;
+    in-out property <string> account-password2;
+    in-out property <bool> account-create-mode;
+    in-out property <bool> account-recover-mode;
+    in-out property <string> account-recovery-key;
+    in property <bool> account-need-code;
+    in-out property <string> account-code;
+    in property <string> account-purpose;
+    in property <string> account-error;
+    in property <bool> account-busy;
+    callback account-submit();
+    callback account-close();
 
     // Home
     in property <string> my-id;
-    in property <string> my-device-name;
+    in-out property <string> my-device-name;
+    in property <bool> signed-in;
     in property <string> username;
     in property <string> user-letter;
     in property <string> fingerprint;
@@ -48,22 +63,110 @@ export component AppWindow inherits Window {
     in property <bool> online;
     in property <string> status-text;
     in property <[DeviceItem]> devices;
+    in property <[BookItem]> book;
     in property <string> greeting;
     in property <[RecentItem]> recents;
     callback copy-id();
-    in property <[ContactItem]> contacts;
-    callback revoke-contact(string);
-    callback forget-contact(string);
     in property <bool> connect-busy;
     in-out property <string> connect-id;
-    in-out property <bool> auto-accept;
+    callback connect(string);
+    callback connect-with-password(string);
+    callback remove-device(string);
+    callback book-edit(string);
+    callback book-remove(string);
+    callback book-add();
+
+    // Settings
+    in property <bool> unattended;
+    in property <bool> account-2fa;
+    in-out property <bool> own-devices;
     in-out property <bool> share-clipboard;
     in-out property <bool> allow-direct;
-    callback allow-direct-changed(bool);
-    callback connect(string);
-    callback auto-accept-changed(bool);
+    in-out property <bool> run-in-background;
+    in-out property <bool> start-at-login;
+    callback rename-device(string);
+    callback unattended-setup();
+    callback unattended-disable();
+    callback own-devices-changed(bool);
     callback share-clipboard-changed(bool);
+    callback allow-direct-changed(bool);
+    callback run-in-background-changed(bool);
+    callback start-at-login-changed(bool);
+    callback sign-in();
+    callback create-account();
     callback sign-out();
+    callback totp-setup();
+    callback totp-disable();
+
+    // Organisations
+    in property <[OrgItem]> orgs;
+    in property <string> org-selected;
+    in property <string> org-name;
+    in property <bool> org-admin;
+    in property <[BookItem]> org-devices;
+    in property <[MemberItem]> org-members;
+    in property <[RuleItem]> org-rules;
+    in property <[DeviceGroupItem]> org-device-groups;
+    in property <[WorkerItem]> org-workers;
+    in property <bool> org-busy;
+    callback org-select(string);
+    callback org-create(string);
+    callback org-add-member(string, string, bool);
+    callback org-remove-member(string);
+    callback org-add-rule(string, string);
+    callback org-remove-rule(string, string);
+    callback org-set-device-group(string, string);
+    callback org-new-worker(string);
+    callback org-revoke-worker(string);
+
+    // Unattended access to another computer: password and code
+    in property <bool> pw-visible;
+    in property <string> pw-target;
+    in-out property <string> pw-password;
+    in-out property <string> pw-code;
+    in-out property <SaveIn> pw-save;
+    in property <bool> pw-saved;
+    in property <string> pw-error;
+    in property <bool> pw-busy;
+    callback pw-submit();
+    callback pw-cancel();
+
+    // Address-book entry
+    in property <bool> entry-visible;
+    in property <bool> entry-new;
+    in-out property <string> entry-id;
+    in-out property <string> entry-label;
+    in-out property <string> entry-password;
+    in-out property <SaveIn> entry-save;
+    in property <bool> entry-has-password;
+    in property <string> entry-error;
+    callback entry-submit();
+    callback entry-cancel();
+    /// This device has a keychain to save passwords in.
+    in property <bool> keychain;
+
+    // Setting up an authenticator app (unattended access, or the account's two factors)
+    in property <bool> twofa-visible;
+    in property <bool> twofa-unattended;
+    in property <int> twofa-step;
+    in-out property <string> twofa-password;
+    in-out property <string> twofa-password2;
+    in property <image> twofa-qr;
+    in property <string> twofa-secret;
+    in-out property <string> twofa-code;
+    in property <string> twofa-error;
+    in property <bool> twofa-busy;
+    callback twofa-next();
+    callback twofa-cancel();
+
+    // A secret shown once
+    in property <bool> secret-visible;
+    in property <string> secret-title;
+    in property <string> secret-detail;
+    in property <string> secret-text;
+    in property <bool> secret-copied;
+    callback secret-copy();
+    callback secret-done();
 
     // Hosting
     in property <bool> hosting-active;
@@ -78,7 +181,6 @@ export component AppWindow inherits Window {
     in property <string> incoming-fingerprint;
     in property <TrustLevel> incoming-trust;
     in property <string> incoming-previous-fingerprint;
-    in-out property <bool> incoming-always-allow;
     in property <string> incoming-note;
     callback incoming-answer(bool);
 
@@ -133,6 +235,7 @@ export component AppWindow inherits Window {
     // The host we are connecting to has a new identity
     in property <bool> identity-changed-visible;
     in property <string> identity-changed-user;
+    in property <bool> identity-changed-device;
     in property <string> identity-changed-fingerprint;
     in property <string> identity-changed-previous;
     callback identity-changed-answer(bool);
@@ -166,23 +269,18 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.page == Page.login && !root.mobile: LoginPage {
-        server <=> root.login-server;
-        username <=> root.login-username;
-        password <=> root.login-password;
-        password2 <=> root.login-password2;
-        device-name <=> root.login-device-name;
-        create-mode <=> root.login-create-mode;
-        recover-mode <=> root.login-recover-mode;
-        recovery-key <=> root.login-recovery-key;
-        error: root.login-error;
-        busy: root.login-busy;
-        submit => { root.login-submit(); }
+    if root.page == Page.setup && !root.mobile: SetupPage {
+        server <=> root.setup-server;
+        name <=> root.setup-name;
+        error: root.setup-error;
+        busy: root.setup-busy;
+        submit => { root.setup-submit(); }
     }
 
     if root.page == Page.home && !root.mobile: HomePage {
         my-id: root.my-id;
-        my-device-name: root.my-device-name;
+        my-device-name <=> root.my-device-name;
+        signed-in: root.signed-in;
         username: root.username;
         user-letter: root.user-letter;
         fingerprint: root.fingerprint;
@@ -190,26 +288,61 @@ export component AppWindow inherits Window {
         online: root.online;
         status-text: root.status-text;
         devices: root.devices;
+        book: root.book;
         greeting: root.greeting;
         recents: root.recents;
         copy-id => { root.copy-id(); }
-        contacts: root.contacts;
-        revoke-contact(u) => { root.revoke-contact(u); }
-        forget-contact(u) => { root.forget-contact(u); }
         connect-busy: root.connect-busy;
         connect-id <=> root.connect-id;
-        auto-accept <=> root.auto-accept;
-        share-clipboard <=> root.share-clipboard;
-        allow-direct <=> root.allow-direct;
-        allow-direct-changed(v) => { root.allow-direct-changed(v); }
         hosting-active: root.hosting-active;
         hosting-peer: root.hosting-peer;
         connect(id) => { root.connect(id); }
-        auto-accept-changed(v) => { root.auto-accept-changed(v); }
-        share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
-        sign-out => { root.sign-out(); }
+        connect-with-password(id) => { root.connect-with-password(id); }
         stop-hosting => { root.stop-hosting(); }
         send-files => { root.send-files(); }
+        remove-device(id) => { root.remove-device(id); }
+        book-edit(id) => { root.book-edit(id); }
+        book-remove(id) => { root.book-remove(id); }
+        book-add => { root.book-add(); }
+        unattended: root.unattended;
+        account-2fa: root.account-2fa;
+        own-devices <=> root.own-devices;
+        share-clipboard <=> root.share-clipboard;
+        allow-direct <=> root.allow-direct;
+        run-in-background <=> root.run-in-background;
+        start-at-login <=> root.start-at-login;
+        rename-device(n) => { root.rename-device(n); }
+        unattended-setup => { root.unattended-setup(); }
+        unattended-disable => { root.unattended-disable(); }
+        own-devices-changed(v) => { root.own-devices-changed(v); }
+        share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
+        allow-direct-changed(v) => { root.allow-direct-changed(v); }
+        run-in-background-changed(v) => { root.run-in-background-changed(v); }
+        start-at-login-changed(v) => { root.start-at-login-changed(v); }
+        sign-in => { root.sign-in(); }
+        create-account => { root.create-account(); }
+        sign-out => { root.sign-out(); }
+        totp-setup => { root.totp-setup(); }
+        totp-disable => { root.totp-disable(); }
+        orgs: root.orgs;
+        org-selected: root.org-selected;
+        org-name: root.org-name;
+        org-admin: root.org-admin;
+        org-devices: root.org-devices;
+        org-members: root.org-members;
+        org-rules: root.org-rules;
+        org-device-groups: root.org-device-groups;
+        org-workers: root.org-workers;
+        org-busy: root.org-busy;
+        org-select(id) => { root.org-select(id); }
+        org-create(n) => { root.org-create(n); }
+        org-add-member(u, g, a) => { root.org-add-member(u, g, a); }
+        org-remove-member(u) => { root.org-remove-member(u); }
+        org-add-rule(g, d) => { root.org-add-rule(g, d); }
+        org-remove-rule(g, d) => { root.org-remove-rule(g, d); }
+        org-set-device-group(n, ids) => { root.org-set-device-group(n, ids); }
+        org-new-worker(n) => { root.org-new-worker(n); }
+        org-revoke-worker(k) => { root.org-revoke-worker(k); }
         view <=> root.home-view;
         tour-target: root.tour-target;
         start-tour => { root.tour-step = 0; root.tour-visible = true; }
@@ -238,22 +371,16 @@ export component AppWindow inherits Window {
         key(t, d) => { root.key(t, d); }
     }
 
-    if root.page == Page.login && root.mobile: MobileLoginPage {
+    if root.page == Page.setup && root.mobile: MobileSetupPage {
         x: root.inset-left;
         y: root.inset-top;
         width: root.width - root.inset-left - root.inset-right;
         height: root.height - root.inset-top - root.inset-bottom;
-        server <=> root.login-server;
-        username <=> root.login-username;
-        password <=> root.login-password;
-        password2 <=> root.login-password2;
-        device-name <=> root.login-device-name;
-        create-mode <=> root.login-create-mode;
-        recover-mode <=> root.login-recover-mode;
-        recovery-key <=> root.login-recovery-key;
-        error: root.login-error;
-        busy: root.login-busy;
-        submit => { root.login-submit(); }
+        server <=> root.setup-server;
+        name <=> root.setup-name;
+        error: root.setup-error;
+        busy: root.setup-busy;
+        submit => { root.setup-submit(); }
     }
 
     if root.page == Page.home && root.mobile: MobileHomePage {
@@ -262,7 +389,8 @@ export component AppWindow inherits Window {
         width: root.width - root.inset-left - root.inset-right;
         height: root.height - root.inset-top - root.inset-bottom;
         my-id: root.my-id;
-        my-device-name: root.my-device-name;
+        my-device-name <=> root.my-device-name;
+        signed-in: root.signed-in;
         username: root.username;
         user-letter: root.user-letter;
         fingerprint: root.fingerprint;
@@ -270,19 +398,27 @@ export component AppWindow inherits Window {
         online: root.online;
         status-text: root.status-text;
         devices: root.devices;
+        book: root.book;
         greeting: root.greeting;
         recents: root.recents;
-        contacts: root.contacts;
-        revoke-contact(u) => { root.revoke-contact(u); }
-        forget-contact(u) => { root.forget-contact(u); }
         connect-busy: root.connect-busy;
         connect-id <=> root.connect-id;
+        account-2fa: root.account-2fa;
         share-clipboard <=> root.share-clipboard;
         allow-direct <=> root.allow-direct;
         allow-direct-changed(v) => { root.allow-direct-changed(v); }
         connect(id) => { root.connect(id); }
+        connect-with-password(id) => { root.connect-with-password(id); }
         share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
+        rename-device(n) => { root.rename-device(n); }
+        sign-in => { root.sign-in(); }
+        create-account => { root.create-account(); }
         sign-out => { root.sign-out(); }
+        totp-setup => { root.totp-setup(); }
+        totp-disable => { root.totp-disable(); }
+        book-edit(id) => { root.book-edit(id); }
+        book-remove(id) => { root.book-remove(id); }
+        book-add => { root.book-add(); }
         keyboard-open: root.keyboard-height > 0;
         view <=> root.home-view;
         tour-target: root.tour-target;
@@ -349,8 +485,76 @@ export component AppWindow inherits Window {
         answer(ok) => { root.file-offer-answer(ok); }
     }
 
+    if root.entry-visible: EntryDialog {
+        new-entry: root.entry-new;
+        device-id <=> root.entry-id;
+        label <=> root.entry-label;
+        password <=> root.entry-password;
+        save <=> root.entry-save;
+        keychain: root.keychain;
+        signed-in: root.signed-in;
+        has-password: root.entry-has-password;
+        error: root.entry-error;
+        submit => { root.entry-submit(); }
+        cancel => { root.entry-cancel(); }
+    }
+
+    if root.twofa-visible: TwoFactorDialog {
+        unattended: root.twofa-unattended;
+        step: root.twofa-step;
+        password <=> root.twofa-password;
+        password2 <=> root.twofa-password2;
+        qr: root.twofa-qr;
+        secret: root.twofa-secret;
+        code <=> root.twofa-code;
+        error: root.twofa-error;
+        busy: root.twofa-busy;
+        next => { root.twofa-next(); }
+        cancel => { root.twofa-cancel(); }
+    }
+
+    if root.account-visible: AccountDialog {
+        username <=> root.account-username;
+        password <=> root.account-password;
+        password2 <=> root.account-password2;
+        create-mode <=> root.account-create-mode;
+        recover-mode <=> root.account-recover-mode;
+        recovery-key <=> root.account-recovery-key;
+        need-code: root.account-need-code;
+        code <=> root.account-code;
+        purpose: root.account-purpose;
+        error: root.account-error;
+        busy: root.account-busy;
+        submit => { root.account-submit(); }
+        close => { root.account-close(); }
+    }
+
+    if root.pw-visible: PasswordConnectDialog {
+        target: root.pw-target;
+        password <=> root.pw-password;
+        code <=> root.pw-code;
+        save <=> root.pw-save;
+        keychain: root.keychain;
+        signed-in: root.signed-in;
+        password-saved: root.pw-saved;
+        error: root.pw-error;
+        busy: root.pw-busy;
+        submit => { root.pw-submit(); }
+        cancel => { root.pw-cancel(); }
+    }
+
+    if root.secret-visible: SecretDialog {
+        title: root.secret-title;
+        detail: root.secret-detail;
+        secret: root.secret-text;
+        copied: root.secret-copied;
+        copy => { root.secret-copy(); }
+        done => { root.secret-done(); }
+    }
+
     if root.identity-changed-visible: IdentityChangedDialog {
         user: root.identity-changed-user;
+        device-changed: root.identity-changed-device;
         fingerprint: root.identity-changed-fingerprint;
         previous-fingerprint: root.identity-changed-previous;
         answer(ok) => { root.identity-changed-answer(ok); }
@@ -372,7 +576,6 @@ export component AppWindow inherits Window {
         fingerprint: root.incoming-fingerprint;
         trust: root.incoming-trust;
         previous-fingerprint: root.incoming-previous-fingerprint;
-        always-allow <=> root.incoming-always-allow;
         note: root.incoming-note;
         answer(ok) => { root.incoming-answer(ok); }
     }
