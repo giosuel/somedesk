@@ -10,7 +10,7 @@ hide:
 
 <h1 class="sd-hero__title">Your computers,<br><span class="sd-gradient-text">within reach.</span></h1>
 
-<p class="sd-hero__lead">SomeDesk is a self-hosted remote desktop. Sessions are encrypted end to end, the server never sees your password, and it's written in Rust.</p>
+<p class="sd-hero__lead">SomeDesk is a self-hosted remote desktop. Connect by ID without an account, sessions are encrypted end to end, and every feature is free, forever.</p>
 
 <div class="sd-badges">
   <a href="https://github.com/giosuel/somedesk/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/giosuel/somedesk/ci.yml?style=flat-square&labelColor=16181d&label=CI" alt="CI"></a>
@@ -33,6 +33,15 @@ hide:
 
 </div>
 
+<div class="sd-free" markdown="0">
+  <h2>Every feature. <span class="sd-gradient-text">Free, forever.</span></h2>
+  <p>No paid tier, no licence key, no device limit, no "business edition". What other remote desktops sell, SomeDesk gives away, and nothing will ever move behind a payment.</p>
+  <ul>
+    <li>Unattended access</li><li>Two-factor authentication</li><li>Address book sync</li><li>Organisations</li><li>Enrolled machines</li><li>File transfer</li><li>Every platform</li><li>Commercial use</li>
+  </ul>
+  <p><a href="free/">Why you can count on it →</a></p>
+</div>
+
 <h2 class="sd-section-title">Built for privacy, not around it</h2>
 <p class="sd-section-lead">Everything that matters happens between your two computers. Your server connects them, and that's all.</p>
 
@@ -44,8 +53,8 @@ hide:
   </div>
   <div class="sd-card">
     <span class="sd-card__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 20a4 4 0 1 0 0-8a4 4 0 0 0 0 8z M11 13l9-9 M16 8l3 3 M14 10l2 2"/></svg></span>
-    <h3>Zero-knowledge sign-in</h3>
-    <p>OPAQUE login means the server never receives your password. Your identity key is sealed with it, and a recovery key gets you back in.</p>
+    <h3>No account needed</h3>
+    <p>Every installation gets its own ID, bound to a key that never leaves it. Accounts are optional, and their passwords never reach the server either.</p>
   </div>
   <div class="sd-card">
     <span class="sd-card__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z M5 14h14a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1z M8 7h.01 M8 17h.01"/></svg></span>
@@ -59,13 +68,13 @@ hide:
   </div>
   <div class="sd-card">
     <span class="sd-card__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 11v3 M8.5 8.5a5 5 0 0 1 8.5 3.5v1.5 M7 12.5v1a5 5 0 0 0 2.5 4.3 M15 17a4 4 0 0 1-.6 2.5 M4.5 9a8.5 8.5 0 0 1 15 2"/></svg></span>
-    <h3>Knows who's calling</h3>
-    <p>Identities are remembered like SSH host keys. If a contact's key changes, SomeDesk stops and warns before connecting.</p>
+    <h3>The computer decides</h3>
+    <p>Someone accepts, or a password plus a code from an authenticator app, or your own devices, or an organisation's signed rules. The server can't let anyone in.</p>
   </div>
   <div class="sd-card">
     <span class="sd-card__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6v4H9z M9 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-3"/></svg></span>
     <h3>Everything you need</h3>
-    <p>Shared clipboard, files in both directions (checked with SHA-256), a monitor picker, and unattended access for your own devices.</p>
+    <p>An encrypted address book that syncs, saved passwords, shared clipboard, files both ways, a monitor picker, and a tray icon that keeps you reachable.</p>
   </div>
 </div>
 
@@ -84,7 +93,7 @@ Start it with Docker Compose on a machine both computers can reach (UDP 21116).
 
 ### Install the app
 
-Get it for Linux, Windows, macOS or Android from the [releases](https://github.com/giosuel/somedesk/releases), and create an account on your server.
+Get it for Linux, Windows, macOS or Android from the [releases](https://github.com/giosuel/somedesk/releases). Enter your server's address, and the computer gets its ID. No sign-up.
 
 </div>
 <div class="sd-step" markdown>
@@ -94,6 +103,13 @@ Get it for Linux, Windows, macOS or Android from the [releases](https://github.c
 Enter the other computer's nine-digit ID. The person there sees who you are and accepts.
 
 </div>
+</div>
+
+<h2 class="sd-section-title">Four ways in, one rule</h2>
+<p class="sd-section-lead">However someone connects, the computer they connect to checks it itself. <a href="connecting/">Ways to connect</a></p>
+
+<div class="sd-figure">
+  <img src="assets/ways-in.svg" alt="The four ways to connect: by ID, with a password and code, from your own devices, or through an organisation; each checked by the host">
 </div>
 
 <h2 class="sd-section-title">A closer look</h2>
@@ -108,7 +124,7 @@ Enter the other computer's nine-digit ID. The person there sees who you are and 
 <div class="sd-meet">
   <div class="sd-meet__text">
     <h2>Meet Desi</h2>
-    <p>The first time you sign in, Desi shows you around: your ID, how to reach your other computers, and what keeps your sessions private. Five quick steps, and she's always one click away in Settings.</p>
+    <p>The first time you start SomeDesk, Desi shows you around: your ID, how to reach your other computers, and what keeps your sessions private. Five quick steps, and she's always one click away in Settings.</p>
     <div class="sd-meet__poses" aria-hidden="true">
       <img src="assets/mascot/wave.svg" alt="">
       <img src="assets/mascot/point.svg" alt="">
@@ -126,7 +142,7 @@ Enter the other computer's nine-digit ID. The person there sees who you are and 
 
 ## Take back your remote desktop
 
-SomeDesk is free software under the AGPL. Read how it keeps sessions private, or set up your own server.
+SomeDesk is free software under the AGPL, and every feature is free for everyone, for good. Read how it keeps sessions private, or set up your own server.
 
 <div class="sd-actions">
   <a class="sd-button sd-button--primary" href="self-hosting/">Self-hosting guide</a>

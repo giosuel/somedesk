@@ -23,6 +23,14 @@ listens on `127.0.0.1:21216`, not the default port 21116, so it doesn't collide 
 server on the same machine: start the apps with `--server 127.0.0.1:21216`, and run
 `scripts/demo-env.sh stop` when you're done.
 `somedesk --mobile-ui` (or `SOMEDESK_MOBILE_UI=1`) shows the phone layout on the desktop.
+Each app instance needs its own `XDG_DATA_HOME` (or `--profile`), since only one instance runs
+per data directory. An enrolled machine can be tried on a third display: create a service worker
+key under **Organisations**, then `somedesk-agent --dir /tmp/agent enroll --server 127.0.0.1:21216
+--key …` and `somedesk-agent --dir /tmp/agent run`.
+
+`crates/e2e-tests/tests/connect_modes.rs` tests the new ways in against a real server:
+unattended access with password and code, two-factor sign-in, the
+address book sync, and organisation policies with an enrolled machine.
 
 ## Android
 

@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 420" width="960" height="420" role="img" aria-labelledby="t d">
+  <title id="t">Unattended access, step by step</title>
+  <desc id="d">The viewer and the host first open an end-to-end encrypted session through the server. Inside it, the viewer proves it knows the host's password with OPAQUE, bound to that session, so the password itself is never sent. Then it sends the current code from the authenticator app. The host checks both itself and locks out repeated wrong attempts. The server only forwards ciphertext.</desc>
+  <style>
+    text { font-family: Geist, Inter, "Segoe UI", system-ui, sans-serif; }
+    /* One 12 s cycle, four steps of 3 s each. */
+    .step { opacity: .4; animation: step 12s infinite; }
+    .s2 { animation-delay: 3s; } .s3 { animation-delay: 6s; } .s4 { animation-delay: 9s; }
+    @keyframes step { 0%, 24% { opacity: 1; } 26%, 100% { opacity: .4; } }
+    .pkt { opacity: 0; animation: pkt 12s infinite; }
+    @keyframes pkt { 0% { offset-distance: 0%; opacity: 0; } 2% { opacity: 1; } 16% { offset-distance: 100%; opacity: 1; } 18%, 100% { offset-distance: 100%; opacity: 0; } }
+    .p1 { offset-path: path("M200 132 H760"); }
+    .p1b { offset-path: path("M760 132 H200"); animation-delay: 1.4s; }
+    .p2 { offset-path: path("M200 208 H760"); animation-delay: 3s; }
+    .p3 { offset-path: path("M200 284 H760"); animation-delay: 6s; }
+    @media (prefers-reduced-motion: reduce) {
+      .step { animation: none; opacity: 1; }
+      .pkt { animation: none; opacity: 0; }
+    }
+  </style>
+
+  <!-- Columns -->
+  <rect x="40" y="56" width="160" height="262" rx="14" fill="#16181d" stroke="#2a2e36"/>
+  <text x="120" y="84" font-size="15" font-weight="600" fill="#d9dde3" text-anchor="middle">Viewer</text>
+  <text x="120" y="102" font-size="11.5" fill="#8a919c" text-anchor="middle">knows the password</text>
+  <rect x="400" y="56" width="160" height="262" rx="14" fill="#121418" stroke="#2a2e36" stroke-dasharray="5 5"/>
+  <text x="480" y="84" font-size="15" font-weight="600" fill="#d9dde3" text-anchor="middle">Server</text>
+  <text x="480" y="102" font-size="11.5" fill="#8a919c" text-anchor="middle">forwards ciphertext</text>
+  <rect x="760" y="56" width="160" height="262" rx="14" fill="#16181d" stroke="#2a2e36"/>
+  <text x="840" y="84" font-size="15" font-weight="600" fill="#d9dde3" text-anchor="middle">Host</text>
+  <text x="840" y="102" font-size="11.5" fill="#8a919c" text-anchor="middle">checks everything</text>
+
+  <!-- 1: the encrypted session -->
+  <g class="step s1">
+    <path d="M200 132 H760" stroke="#22252c" stroke-width="3"/>
+    <rect x="232" y="116" width="150" height="32" rx="9" fill="#14161b" stroke="#2a2e36"/>
+    <text x="307" y="136" font-size="12" font-weight="600" fill="#d9dde3" text-anchor="middle">1 · Noise session</text>
+    <rect x="440" y="120" width="80" height="24" rx="7" fill="#0e0f12" stroke="#2a2e36"/>
+    <text x="480" y="136" font-size="10.5" fill="#6f7681" text-anchor="middle" font-family="Geist Mono, monospace">ciphertext</text>
+    <text x="578" y="136" font-size="11" fill="#8a919c">keys only the two hold</text>
+  </g>
+  <!-- 2: OPAQUE -->
+  <g class="step s2">
+    <path d="M200 208 H760" stroke="#22252c" stroke-width="3"/>
+    <rect x="232" y="192" width="150" height="32" rx="9" fill="#14161b" stroke="#2a2e36"/>
+    <text x="307" y="212" font-size="12" font-weight="600" fill="#d9dde3" text-anchor="middle">2 · Password proof</text>
+    <rect x="440" y="196" width="80" height="24" rx="7" fill="#0e0f12" stroke="#2a2e36"/>
+    <text x="480" y="212" font-size="10.5" fill="#6f7681" text-anchor="middle" font-family="Geist Mono, monospace">ciphertext</text>
+    <text x="578" y="206" font-size="11" fill="#8a919c">OPAQUE, tied to this session:</text>
+    <text x="578" y="220" font-size="11" fill="#8a919c">the password is never sent</text>
+  </g>
+  <!-- 3: TOTP -->
+  <g class="step s3">
+    <path d="M200 284 H760" stroke="#22252c" stroke-width="3"/>
+    <rect x="232" y="268" width="150" height="32" rx="9" fill="#14161b" stroke="#2a2e36"/>
+    <text x="307" y="288" font-size="12" font-weight="600" fill="#d9dde3" text-anchor="middle">3 · Code from the app</text>
+    <rect x="440" y="272" width="80" height="24" rx="7" fill="#0e0f12" stroke="#2a2e36"/>
+    <text x="480" y="288" font-size="10.5" fill="#6f7681" text-anchor="middle" font-family="Geist Mono, monospace">ciphertext</text>
+    <text x="578" y="288" font-size="11" fill="#8a919c">valid for 30 s, used once</text>
+  </g>
+  <!-- 4: verdict -->
+  <g class="step s4">
+    <rect x="610" y="340" width="310" height="44" rx="10" fill="#14161b" stroke="#7dd3c0" stroke-opacity=".6"/>
+    <text x="628" y="359" font-size="12" font-weight="600" fill="#7dd3c0">4 · Both right: the session starts</text>
+    <text x="628" y="375" font-size="11" fill="#8a919c">wrong 3 times: locked, 30 s and doubling</text>
+  </g>
+
+  <!-- Packets -->
+  <circle class="pkt p1" r="5" fill="#7dd3c0"/>
+  <circle class="pkt p1b" r="5" fill="#7dd3c0"/>
+  <circle class="pkt p2" r="5" fill="#7dd3c0"/>
+  <circle class="pkt p3" r="5" fill="#7dd3c0"/>
+
+  <text x="480" y="30" font-size="12" fill="#8a919c" text-anchor="middle">The server can't learn the password, replay the code, or try passwords on its own: every attempt goes to the host.</text>
+</svg>

@@ -1,5 +1,5 @@
 site_name: SomeDesk
-site_description: Remote desktop you host yourself. End-to-end encrypted, zero-knowledge sign-in, written in Rust.
+site_description: Remote desktop you host yourself. End-to-end encrypted, no account needed, every feature free forever. Written in Rust.
 site_url: https://somedesk.giosuel.ch/
 repo_url: https://github.com/giosuel/somedesk
 repo_name: giosuel/somedesk
@@ -72,8 +72,11 @@ nav:
   - Home: index.md
   - Guide:
       - Getting started: getting-started.md
+      - Ways to connect: connecting.md
+      - Organisations: organisations.md
       - Self-hosting: self-hosting.md
       - Platforms: platforms.md
+      - Free, forever: free.md
   - How it works:
       - Architecture: architecture.md
       - Security model: security.md
