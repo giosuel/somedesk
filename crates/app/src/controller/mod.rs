@@ -159,6 +159,9 @@ struct State {
     login: Option<(Arc<ServerConn>, Arc<LoggedIn>)>,
     /// What to do after the account dialog confirms the password.
     after_unlock: Option<Unlocked>,
+    /// The first start on a server that only lets in its accounts' devices: the server and the
+    /// device's name, waiting for the user to sign in.
+    setup_pending: Option<(String, String)>,
     /// Setting up an authenticator: unattended access (with its password record) or the
     /// account's second factor.
     twofa: Option<TwoFactorSetup>,

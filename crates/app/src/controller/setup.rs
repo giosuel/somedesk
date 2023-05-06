@@ -47,18 +47,50 @@ impl Controller {
                     this.save_settings();
                     this.go_online(creds);
                 }
+                // The server only lets in its accounts' devices: sign in first.
+                Err(e) if e.code() == Some(somedesk_proto::control::ErrorCode::Forbidden) => {
+                    this.0.state.lock().unwrap().setup_pending = Some((server, name));
+                    this.ui(|ui| {
+                        ui.set_setup_error(
+                            "This server only lets in devices of its accounts. Sign in, or ask its administrator for an account."
+                                .into(),
+                        )
+                    });
+                    this.open_account_dialog(false, "");
+                }
                 Err(e) => {
-                    let msg = match e.code() {
-                        Some(somedesk_proto::control::ErrorCode::Forbidden) => {
-                            "This server only lets in devices of its accounts. Ask its administrator for an account."
-                                .to_string()
-                        }
-                        _ => e.to_string(),
-                    };
+                    let msg = e.to_string();
                     this.ui(move |ui| ui.set_setup_error(msg.into()));
                 }
             }
         });
+    }
+
+    /// Sets this device up on a server that only lets in its accounts' devices, with the
+    /// account just logged in to on `conn`.
+    pub(super) async fn finish_setup(&self, conn: Arc<ServerConn>, login: &LoggedIn, server: String, name: String) {
+        let result = async {
+            let mut creds = conn.create_device(&server, &name).await?;
+            conn.attach(login, &mut creds).await?;
+            Ok::<_, somedesk_client::ClientError>(creds)
+        }
+        .await;
+        conn.close();
+        match result {
+            Ok(creds) => {
+                if let Err(e) = creds.save(&self.creds_path()) {
+                    tracing::error!("cannot store credentials: {e:#}");
+                }
+                self.0.state.lock().unwrap().settings.last_server = server;
+                self.save_settings();
+                self.ui(|ui| ui.set_setup_error("".into()));
+                self.go_online(creds);
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                self.ui(move |ui| ui.set_setup_error(msg.into()));
+            }
+        }
     }
 
     /// Shows this device on the home screen and keeps it online.

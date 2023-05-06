@@ -15,7 +15,10 @@ impl Controller {
         ui.on_account_submit(move || c.account_submit());
         let c = self.clone();
         ui.on_account_close(move || {
-            c.0.state.lock().unwrap().after_unlock = None;
+            let mut st = c.0.state.lock().unwrap();
+            st.after_unlock = None;
+            st.setup_pending = None;
+            drop(st);
             c.close_account_dialog();
         });
         let c = self.clone();
@@ -43,7 +46,7 @@ impl Controller {
 
     /// Opens the account dialog: to sign in (or create an account), or with a `purpose` to
     /// confirm an action with the password of the account this device is signed in to.
-    fn open_account_dialog(&self, create: bool, purpose: &str) {
+    pub(super) fn open_account_dialog(&self, create: bool, purpose: &str) {
         let username = self.0.state.lock().unwrap().creds.as_ref().and_then(|c| c.username().map(str::to_owned));
         let purpose = purpose.to_owned();
         self.ui(move |ui| {
@@ -130,15 +133,34 @@ impl Controller {
             ui.set_account_error(p.into());
             return;
         }
-        let Some(conn) = self.conn() else {
+        // On the first start, signing in sets this device up (see `setup_submit`).
+        let setup = self.0.state.lock().unwrap().setup_pending.clone();
+        let conn = self.conn();
+        if conn.is_none() && setup.is_none() {
             ui.set_account_error("Not connected to the server; try again in a moment.".into());
             return;
-        };
+        }
         let recovery_key = recovery_key.map(|r| r.expect("checked above"));
         ui.set_account_error("".into());
         ui.set_account_busy(true);
         let this = self.clone();
         self.0.rt.spawn(async move {
+            let conn = match conn {
+                Some(c) => c,
+                None => {
+                    let server = setup.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
+                    match ServerConn::connect(&server, None).await {
+                        Ok((c, _events)) => c,
+                        Err(e) => {
+                            let msg = e.to_string();
+                            return this.ui(move |ui| {
+                                ui.set_account_busy(false);
+                                ui.set_account_error(msg.into());
+                            });
+                        }
+                    }
+                }
+            };
             let result = async {
                 // A recovery key to show the user afterwards, and why.
                 let mut new_key = None;
@@ -165,6 +187,14 @@ impl Controller {
             .await;
             match result {
                 Ok((login, new_key)) => {
+                    if let Some((server, name)) = setup {
+                        this.0.state.lock().unwrap().setup_pending = None;
+                        this.close_account_dialog();
+                        if let Some((rk, reason)) = new_key {
+                            this.show_recovery_key(&rk, reason);
+                        }
+                        return this.finish_setup(conn, &login, server, name).await;
+                    }
                     let login = Arc::new(login);
                     let action = {
                         let mut st = this.0.state.lock().unwrap();
