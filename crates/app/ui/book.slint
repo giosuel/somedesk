@@ -133,7 +133,10 @@ export component BookView inherits VerticalLayout {
             alignment: center;
             padding: 40px;
             spacing: 10px;
-            Icon { x: (parent.width - self.width) / 2; d: Icons.book; size: 28px; color: Theme.faint; }
+            HorizontalLayout {
+                alignment: center;
+                Icon { d: Icons.book; size: 28px; color: Theme.faint; }
+            }
             Text {
                 text: "Nothing here yet. Add a computer by its ID, or connect to one: you can keep it afterwards.";
                 color: Theme.subtle;
