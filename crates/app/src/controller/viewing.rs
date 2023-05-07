@@ -212,14 +212,25 @@ impl Controller {
         ask: Ask,
         trusted_change: bool,
     ) -> somedesk_client::Result<Option<SessionEnd>> {
-        let (mut ch, _host_info, route) = session::connect_routed(&conn, &creds, device_id).await?;
+        let (mut ch, host_info, route) = session::connect_routed(&conn, &creds, device_id).await?;
         let route_label = match route {
             session::Route::Direct => "Encrypted · direct",
             session::Route::Relay => "Encrypted · relayed",
         };
-        let peer = ch.peer.clone();
+        let peer = access::verified_identity(&ch.peer, &host_info.identity);
         let own_account = access::same_account(creds.account.as_ref().map(|a| &a.identity_pk), &peer);
-        let status = self.0.state.lock().unwrap().trust.as_ref().map(|t| t.status(device_id, &peer));
+        let status = {
+            let st = self.0.state.lock().unwrap();
+            let status = st.trust.as_ref().map(|t| t.status(device_id, &peer));
+            // The address book pins the key too, for all of the account's devices: a new one
+            // that never saw this device is warned just the same.
+            let pinned = st.book.as_ref().and_then(|b| b.get(device_id)).and_then(|e| e.device_pk);
+            match (status, pinned) {
+                (Some(PeerStatus::Changed(c)), _) => Some(PeerStatus::Changed(c)),
+                (_, Some(pk)) if pk != peer.device_pk => Some(PeerStatus::Changed(Changed::Device { previous_pk: pk })),
+                (status, _) => status,
+            }
+        };
         if let (Some(PeerStatus::Changed(changed)), false, false) = (&status, own_account, trusted_change) {
             // Stop before the host sees anything from us; let the user decide.
             drop(ch);

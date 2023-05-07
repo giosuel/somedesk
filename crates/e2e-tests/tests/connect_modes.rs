@@ -128,6 +128,44 @@ async fn attempt(viewer: &Device, host: &mut Device, store: &mut Unattended, pas
     verdict
 }
 
+/// A guesser that leaves once it has the host's challenge, which already tells it whether its
+/// password was right: whether the host could tell something went wrong.
+async fn abandoned_attempt(viewer: &Device, host: &mut Device, store: &mut Unattended, password: &str) -> bool {
+    let host_pk = host.creds.device_key().public();
+    let (mut v, mut h) = open(viewer, host).await;
+    let (request, _state) = somedesk_crypto::unattended::viewer_start(password).unwrap();
+    v.sender.send(&SessionMsg::UnattendedStart { request }).await.unwrap();
+    let host_side = async {
+        let Asked::Password(request) = access::read_request(&mut h).await.unwrap() else {
+            panic!("expected a password")
+        };
+        store.check(&mut h, &host_pk, &request).await.is_err()
+    };
+    let viewer_side = async {
+        let challenge = v.receiver.recv::<SessionMsg>().await.unwrap();
+        assert!(matches!(challenge, Some(SessionMsg::UnattendedChallenge { .. })));
+        drop(v);
+    };
+    tokio::join!(host_side, viewer_side).0
+}
+
+#[tokio::test]
+async fn guesses_that_stop_at_the_challenge_count_too() {
+    let Some(ts) = TestServer::start().await else { return };
+    let viewer = ts.anonymous("laptop").await;
+    let mut host = ts.anonymous("office").await;
+    let path = temp("abandoned");
+    let (mut store, _secret) = set_up_unattended(&host, &path, "office unattended password");
+    for _ in 0..3 {
+        assert!(abandoned_attempt(&viewer, &mut host, &mut store, "guess").await);
+    }
+    assert!(store.locked_for() > 0);
+    // And the count is on disk, so restarting the host doesn't reset it.
+    assert!(Unattended::load(&path).unwrap().locked_for() > 0);
+    let _ = std::fs::remove_file(path);
+    ts.stop().await;
+}
+
 #[tokio::test]
 async fn unattended_access_needs_the_password_and_a_fresh_code() {
     let Some(ts) = TestServer::start().await else { return };

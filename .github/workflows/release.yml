@@ -185,20 +185,23 @@ jobs:
           name: macos
           path: target/dist/SomeDesk-*-macos.zip
 
-  # The multi-arch server image (x86-64 and ARM64), pushed to ghcr.io for tags only.
+  # The multi-arch server image (x86-64 and ARM64), pushed to ghcr.io for tags only, and only
+  # once the release is out: `latest` must not run ahead of the apps. Otherwise (no tag, or a
+  # failed build skipped the release) the image is only built.
   image:
-    needs: version
+    needs: [version, release]
+    if: ${{ !cancelled() && needs.version.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.release.result) }}
     permissions:
       contents: read
       packages: write
     uses: ./.github/workflows/server-image.yml
     with:
       version: ${{ needs.version.outputs.version }}
-      push: ${{ github.ref_type == 'tag' }}
+      push: ${{ needs.release.result == 'success' }}
 
   release:
     if: github.ref_type == 'tag'
-    needs: [version, linux, appimage, android, windows, macos, image]
+    needs: [version, linux, appimage, android, windows, macos]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

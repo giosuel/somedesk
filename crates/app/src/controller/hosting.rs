@@ -138,7 +138,8 @@ impl Controller {
                 return;
             }
         };
-        let peer = ch.peer.clone();
+        // The username shown and remembered is the one the server saw too, not just a claim.
+        let peer = access::verified_identity(&ch.peer, &from.identity);
         let label = device_label(from.device_id, &peer);
         if !somedesk_platform::can_share_screen() {
             host::reject(ch, "This device can connect to other computers, but cannot share its own screen.").await;
@@ -170,7 +171,10 @@ impl Controller {
                         return;
                     }
                     Err(e) => {
+                        // Counted as a wrong attempt: the viewer may have learned whether its
+                        // password was right before giving up.
                         tracing::warn!("unattended access failed: {e}");
+                        self.toast(format!("Someone tried unattended access from {label} and gave up"), true);
                         None
                     }
                 }
