@@ -61,6 +61,20 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.2.0" date="2026-10-12">
+      <description>
+        <p>New ways to connect, and optional accounts. Every feature stays free.</p>
+        <ul>
+          <li>Unattended access with a password and a code from an authenticator app, checked by the host itself</li>
+          <li>Optional accounts with two-factor authentication, to reach your own devices and keep an encrypted address book</li>
+          <li>Organisations: shared access rules, signed by the organisation's admins, and enrollment keys for unattended machines</li>
+          <li>Device IDs are now bound to a key that stays on the device</li>
+          <li>Saved passwords in the system keychain, a tray icon, and a single running instance</li>
+          <li>Remote control on Hyprland, Sway and other wlroots desktops</li>
+        </ul>
+        <p>This version is not compatible with 0.1.0. Update the app on every device, and update self-hosted servers.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-12">
       <description>
         <p>The first release.</p>
