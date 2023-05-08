@@ -6,6 +6,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// Upper bound for a single frame. Protects against memory exhaustion by a malicious peer.
 pub const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 
+/// How much of a frame's announced length is reserved before its bytes arrive.
+const READ_CHUNK: usize = 64 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum FrameError {
     #[error("i/o error: {0}")]
@@ -30,18 +33,32 @@ pub async fn write_raw<W: AsyncWrite + Unpin>(w: &mut W, payload: &[u8]) -> Resu
 
 /// Reads one raw frame. Returns `Ok(None)` on a clean end of stream before a frame starts.
 pub async fn read_raw<R: AsyncRead + Unpin>(r: &mut R) -> Result<Option<Vec<u8>>, FrameError> {
+    read_raw_limited(r, MAX_FRAME_LEN).await
+}
+
+/// [`read_raw`] for frames of at most `max` bytes, for streams where nothing larger is expected
+/// (a relay's join header, a connection that hasn't signed in yet). The buffer grows as the
+/// bytes arrive, so a length alone reserves no memory.
+pub async fn read_raw_limited<R: AsyncRead + Unpin>(r: &mut R, max: usize) -> Result<Option<Vec<u8>>, FrameError> {
     let mut len = [0u8; 4];
-    match r.read_exact(&mut len).await {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(e) => return Err(e.into()),
+    let mut got = 0;
+    while got < len.len() {
+        match r.read(&mut len[got..]).await? {
+            0 if got == 0 => return Ok(None),
+            // The stream ended inside a header: cut off, not closed.
+            0 => return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into()),
+            n => got += n,
+        }
     }
     let len = u32::from_be_bytes(len) as usize;
-    if len > MAX_FRAME_LEN {
+    if len > max.min(MAX_FRAME_LEN) {
         return Err(FrameError::TooLarge(len));
     }
-    let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf).await?;
+    let mut buf = Vec::with_capacity(len.min(READ_CHUNK));
+    r.take(len as u64).read_to_end(&mut buf).await?;
+    if buf.len() != len {
+        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into());
+    }
     Ok(Some(buf))
 }
 
@@ -53,7 +70,15 @@ pub async fn write_msg<W: AsyncWrite + Unpin, T: Serialize>(w: &mut W, msg: &T) 
 
 /// Reads one frame and deserializes it. Returns `Ok(None)` on clean end of stream.
 pub async fn read_msg<R: AsyncRead + Unpin, T: DeserializeOwned>(r: &mut R) -> Result<Option<T>, FrameError> {
-    match read_raw(r).await? {
+    read_msg_limited(r, MAX_FRAME_LEN).await
+}
+
+/// [`read_msg`] for frames of at most `max` bytes.
+pub async fn read_msg_limited<R: AsyncRead + Unpin, T: DeserializeOwned>(
+    r: &mut R,
+    max: usize,
+) -> Result<Option<T>, FrameError> {
+    match read_raw_limited(r, max).await? {
         Some(bytes) => Ok(Some(postcard::from_bytes(&bytes)?)),
         None => Ok(None),
     }
@@ -87,6 +112,44 @@ mod tests {
         let (mut a, mut b) = tokio::io::duplex(64);
         a.write_all(&u32::MAX.to_be_bytes()).await.unwrap();
         assert!(matches!(read_raw(&mut b).await, Err(FrameError::TooLarge(_))));
+    }
+
+    #[tokio::test]
+    async fn a_cut_off_header_is_an_error_not_a_clean_end() {
+        let (mut a, mut b) = tokio::io::duplex(64);
+        a.write_all(&[0, 0]).await.unwrap();
+        drop(a);
+        assert!(matches!(read_raw(&mut b).await, Err(FrameError::Io(_))));
+    }
+
+    #[tokio::test]
+    async fn a_cut_off_payload_is_an_error() {
+        let (mut a, mut b) = tokio::io::duplex(64);
+        a.write_all(&10u32.to_be_bytes()).await.unwrap();
+        a.write_all(&[1, 2, 3]).await.unwrap();
+        drop(a);
+        assert!(matches!(read_raw(&mut b).await, Err(FrameError::Io(_))));
+    }
+
+    #[tokio::test]
+    async fn limited_reads_reject_larger_frames() {
+        let (mut a, mut b) = tokio::io::duplex(1024);
+        write_raw(&mut a, &[7; 100]).await.unwrap();
+        write_raw(&mut a, &[7; 10]).await.unwrap();
+        assert!(matches!(read_raw_limited(&mut b, 64).await, Err(FrameError::TooLarge(100))));
+        let (mut a, mut b) = tokio::io::duplex(1024);
+        write_raw(&mut a, &[7; 10]).await.unwrap();
+        assert_eq!(read_raw_limited(&mut b, 64).await.unwrap().unwrap(), vec![7; 10]);
+    }
+
+    #[tokio::test]
+    async fn large_frames_arrive_in_pieces() {
+        let (mut a, mut b) = tokio::io::duplex(4096);
+        let payload: Vec<u8> = (0..300_000u32).map(|i| i as u8).collect();
+        let sent = payload.clone();
+        let writer = tokio::spawn(async move { write_raw(&mut a, &sent).await.unwrap() });
+        assert_eq!(read_raw(&mut b).await.unwrap().unwrap(), payload);
+        writer.await.unwrap();
     }
 
     #[tokio::test]
