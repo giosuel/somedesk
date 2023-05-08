@@ -37,6 +37,15 @@ impl TestServer {
 
     /// A server that only lets in its accounts' devices, when `open` is false.
     pub async fn start_with(open: bool) -> Option<Self> {
+        Self::start_configured(open, somedesk_server::Registration::Open, somedesk_server::Limits::default()).await
+    }
+
+    /// A server with the given registration mode and limits.
+    pub async fn start_configured(
+        open: bool,
+        registration: somedesk_server::Registration,
+        limits: somedesk_server::Limits,
+    ) -> Option<Self> {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".into()))
             .with_test_writer()
@@ -55,6 +64,8 @@ impl TestServer {
             database_url: db_url.clone(),
             data_dir: std::env::temp_dir().join(&db_name),
             open,
+            registration,
+            limits,
             relay_tap: Some(Arc::new(move |b: &[u8]| tap_bytes.lock().unwrap().extend_from_slice(b))),
         })
         .await

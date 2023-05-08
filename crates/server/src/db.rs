@@ -486,3 +486,86 @@ pub async fn audit(pool: &PgPool, user_id: Option<i64>, device_id: Option<u64>, 
         tracing::warn!("audit log write failed: {e}");
     }
 }
+
+// ---------------------------------------------------------------- invites and pruning
+
+fn invite_hash(code: &str) -> Vec<u8> {
+    use sha2::Digest;
+    let normalized: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_uppercase();
+    sha2::Sha256::digest(normalized.as_bytes()).to_vec()
+}
+
+/// A new invite code, good for `uses` accounts until `expires_in_days` (if given) pass.
+pub async fn create_invite(pool: &PgPool, uses: u32, expires_in_days: Option<u32>) -> anyhow::Result<String> {
+    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut rng = rand::thread_rng();
+    let raw: String = (0..20).map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char).collect();
+    let code = raw.as_bytes().chunks(5).map(|c| std::str::from_utf8(c).expect("ascii")).collect::<Vec<_>>().join("-");
+    sqlx::query(
+        "INSERT INTO invites (code_hash, uses_left, expires_at)
+         VALUES ($1, $2, CASE WHEN $3::INT IS NULL THEN NULL ELSE now() + make_interval(days => $3) END)",
+    )
+    .bind(invite_hash(&code))
+    .bind(uses.min(i32::MAX as u32) as i32)
+    .bind(expires_in_days.map(|d| d.min(i32::MAX as u32) as i32))
+    .execute(pool)
+    .await?;
+    Ok(code)
+}
+
+/// Whether `code` is an invite that can still be used.
+pub async fn invite_valid(pool: &PgPool, code: &str) -> anyhow::Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM invites WHERE code_hash = $1 AND uses_left > 0
+                        AND (expires_at IS NULL OR expires_at > now()))",
+    )
+    .bind(invite_hash(code))
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Uses up one account of `code`; `false` if it can't be used (anymore).
+pub async fn use_invite(pool: &PgPool, code: &str) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE invites SET uses_left = uses_left - 1
+         WHERE code_hash = $1 AND uses_left > 0 AND (expires_at IS NULL OR expires_at > now())",
+    )
+    .bind(invite_hash(code))
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+/// Gives back a use of `code` (the account couldn't be created after all).
+pub async fn return_invite(pool: &PgPool, code: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE invites SET uses_left = uses_left + 1 WHERE code_hash = $1")
+        .bind(invite_hash(code))
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Deletes audit log entries older than `days`.
+pub async fn prune_audit_log(pool: &PgPool, days: u32) -> anyhow::Result<u64> {
+    Ok(sqlx::query("DELETE FROM audit_log WHERE at < now() - make_interval(days => $1)")
+        .bind(days.min(i32::MAX as u32) as i32)
+        .execute(pool)
+        .await?
+        .rows_affected())
+}
+
+/// Deletes devices without an account or organisation that weren't seen for `days` (and aren't
+/// `online`).
+pub async fn prune_devices(pool: &PgPool, days: u32, online: &[i64]) -> anyhow::Result<u64> {
+    Ok(sqlx::query(
+        "DELETE FROM devices
+         WHERE user_id IS NULL AND org_id IS NULL AND NOT (id = ANY($2))
+           AND COALESCE(last_seen, created_at) < now() - make_interval(days => $1)",
+    )
+    .bind(days.min(i32::MAX as u32) as i32)
+    .bind(online)
+    .execute(pool)
+    .await?
+    .rows_affected())
+}

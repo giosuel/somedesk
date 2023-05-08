@@ -205,11 +205,23 @@ impl ServerConn {
     /// encrypted under the password-derived key, and under the returned recovery key, which the
     /// user must keep safe.
     pub async fn register(&self, username: &str, password: &str) -> Result<RecoveryKey> {
+        self.register_with_invite(username, password, None).await
+    }
+
+    /// [`ServerConn::register`] on a server that only creates accounts with an invite code
+    /// (without one, it answers [`ErrorCode::InviteRequired`](somedesk_proto::control::ErrorCode)).
+    pub async fn register_with_invite(
+        &self,
+        username: &str,
+        password: &str,
+        invite: Option<&str>,
+    ) -> Result<RecoveryKey> {
         let username = Self::normalize(username)?;
         Self::check_password(password)?;
         let (m1, st) = opaque::client_register_start(&username, password)?;
+        let invite = invite.map(str::to_owned);
         let Response::RegisterStart { message } =
-            self.request(Request::RegisterStart { username: username.clone(), message: m1 }).await?
+            self.request(Request::RegisterStart { username: username.clone(), message: m1, invite }).await?
         else {
             return Err(unexpected());
         };
