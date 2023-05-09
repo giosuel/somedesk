@@ -57,6 +57,8 @@ impl Controller {
             ui.set_account_recover_mode(false);
             ui.set_account_need_code(false);
             ui.set_account_code("".into());
+            ui.set_account_need_invite(false);
+            ui.set_account_invite("".into());
             ui.set_account_password("".into());
             ui.set_account_password2("".into());
             ui.set_account_error("".into());
@@ -74,6 +76,7 @@ impl Controller {
             ui.set_account_recovery_key("".into());
             ui.set_account_code("".into());
             ui.set_account_need_code(false);
+            ui.set_account_invite("".into());
         });
     }
 
@@ -109,6 +112,8 @@ impl Controller {
         let need_code = ui.get_account_need_code();
         let recover = ui.get_account_recover_mode();
         let create = ui.get_account_create_mode() && !recover;
+        let invite = ui.get_account_invite().trim().to_string();
+        let need_invite = create && ui.get_account_need_invite();
         let recovery_key = if recover { Some(RecoveryKey::parse(&ui.get_account_recovery_key())) } else { None };
         let problem = if let Some(Err(e)) = &recovery_key {
             Some(if ui.get_account_recovery_key().trim().is_empty() {
@@ -126,6 +131,8 @@ impl Controller {
             Some("The passwords do not match.".into())
         } else if need_code && code.is_empty() {
             Some("Enter the code from your authenticator app.".into())
+        } else if need_invite && invite.is_empty() {
+            Some("Enter the invite code from the server's admin.".into())
         } else {
             None
         };
@@ -173,7 +180,9 @@ impl Controller {
                     recovered.login
                 } else {
                     if create {
-                        new_key = Some((conn.register(&username, &password).await?, "Created with your new account."));
+                        let invite = Some(invite.as_str()).filter(|i| !i.is_empty());
+                        let rk = conn.register_with_invite(&username, &password, invite).await?;
+                        new_key = Some((rk, "Created with your new account."));
                     }
                     let login = conn.login_with_code(&username, &password, need_code.then_some(code.as_str())).await?;
                     if !login.has_recovery {
@@ -214,6 +223,18 @@ impl Controller {
                     ui.set_account_busy(false);
                     ui.set_account_need_code(true);
                 }),
+                Err(e) if e.code() == Some(somedesk_proto::control::ErrorCode::InviteRequired) => {
+                    let msg = if need_invite {
+                        "This invite code isn't valid (anymore). Check it, or ask the server's admin for a new one."
+                    } else {
+                        "This server only creates accounts with an invite code. Ask its admin for one."
+                    };
+                    this.ui(move |ui| {
+                        ui.set_account_busy(false);
+                        ui.set_account_need_invite(true);
+                        ui.set_account_error(msg.into());
+                    });
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     this.ui(move |ui| {

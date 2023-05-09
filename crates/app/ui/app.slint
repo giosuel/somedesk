@@ -46,6 +46,8 @@ export component AppWindow inherits Window {
     in-out property <string> account-recovery-key;
     in property <bool> account-need-code;
     in-out property <string> account-code;
+    in property <bool> account-need-invite;
+    in-out property <string> account-invite;
     in property <string> account-purpose;
     in property <string> account-error;
     in property <bool> account-busy;
@@ -522,6 +524,8 @@ export component AppWindow inherits Window {
         recovery-key <=> root.account-recovery-key;
         need-code: root.account-need-code;
         code <=> root.account-code;
+        need-invite: root.account-need-invite;
+        invite <=> root.account-invite;
         purpose: root.account-purpose;
         error: root.account-error;
         busy: root.account-busy;
