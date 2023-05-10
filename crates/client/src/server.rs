@@ -11,7 +11,7 @@ use somedesk_crypto::totp::TotpSecret;
 use somedesk_crypto::vault::VaultKey;
 use somedesk_proto::control::*;
 use somedesk_proto::frame::{read_msg, write_msg};
-use somedesk_proto::org::{OrgDeviceCert, SignedPolicy};
+use somedesk_proto::org::{OrgDeviceCert, OrgRotation, PolicyBundle, SignedPolicy};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -536,7 +536,29 @@ impl ServerConn {
         }
     }
 
-    pub async fn get_org_policy(&self, org_id: u64) -> Result<Option<SignedPolicy>> {
+    /// Replaces an organisation's key (see [`Request::RotateOrgKey`]).
+    pub async fn rotate_org_key(
+        &self,
+        org_id: u64,
+        rotation: OrgRotation,
+        policy: SignedPolicy,
+        sealed_keys: Vec<(String, Vec<u8>)>,
+    ) -> Result<()> {
+        match self.request(Request::RotateOrgKey { org_id, rotation, policy, sealed_keys }).await? {
+            Response::Ok => Ok(()),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Joins (or declines) an organisation that invited this account.
+    pub async fn answer_org_invite(&self, org_id: u64, join: bool) -> Result<()> {
+        match self.request(Request::AnswerOrgInvite { org_id, join }).await? {
+            Response::Ok => Ok(()),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn get_org_policy(&self, org_id: u64) -> Result<Option<PolicyBundle>> {
         match self.request(Request::GetOrgPolicy { org_id }).await? {
             Response::OrgPolicy(p) => Ok(p),
             _ => Err(unexpected()),

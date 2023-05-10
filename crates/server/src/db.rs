@@ -3,7 +3,7 @@
 use rand::Rng;
 use somedesk_crypto::opaque::ServerSetup;
 use somedesk_proto::control::{DeviceCert, EncryptedKeyBundle, RecoverySetup};
-use somedesk_proto::org::{OrgDeviceCert, SignedPolicy};
+use somedesk_proto::org::{OrgDeviceCert, OrgRotation, SignedPolicy};
 use somedesk_proto::{DEVICE_ID_MAX, DEVICE_ID_MIN};
 use sqlx::{PgPool, Row};
 
@@ -406,11 +406,21 @@ pub async fn create_org(
                 .bind(sealed_key)
                 .execute(&mut *tx)
                 .await?;
+            sqlx::query("INSERT INTO org_members (org_id, user_id, joined) VALUES ($1, $2, true)")
+                .bind(id as i64)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
             tx.commit().await?;
             return Ok(id);
         }
     }
     anyhow::bail!("could not allocate an organisation id")
+}
+
+/// How many organisations the account created (that still exist).
+pub async fn count_orgs_created_by(pool: &PgPool, user_id: i64) -> anyhow::Result<i64> {
+    Ok(sqlx::query_scalar("SELECT count(*) FROM orgs WHERE created_by = $1").bind(user_id).fetch_one(pool).await?)
 }
 
 pub async fn get_org(pool: &PgPool, org_id: u64) -> anyhow::Result<Option<OrgRow>> {
@@ -422,17 +432,74 @@ pub async fn get_org(pool: &PgPool, org_id: u64) -> anyhow::Result<Option<OrgRow
         .transpose()
 }
 
-pub async fn list_orgs(pool: &PgPool) -> anyhow::Result<Vec<OrgRow>> {
-    sqlx::query(&format!("SELECT {ORG_COLUMNS} ORDER BY o.created_at"))
-        .fetch_all(pool)
-        .await?
-        .into_iter()
-        .map(org_from_row)
-        .collect()
+/// The organisations whose current policy lists the account (not those it declined), with
+/// whether it joined.
+pub async fn list_member_orgs(pool: &PgPool, user_id: i64) -> anyhow::Result<Vec<(OrgRow, bool)>> {
+    sqlx::query(&format!(
+        "SELECT m.joined, {ORG_COLUMNS} JOIN org_members m ON m.org_id = o.id
+         WHERE m.user_id = $1 AND m.joined IS NOT false ORDER BY o.created_at"
+    ))
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|r| {
+        let joined: Option<bool> = r.get("joined");
+        Ok((org_from_row(r)?, joined == Some(true)))
+    })
+    .collect()
 }
 
-/// Stores `policy` (version `version`) if it is newer than the current one.
-pub async fn put_org_policy(pool: &PgPool, org_id: u64, version: u64, policy: &SignedPolicy) -> anyhow::Result<bool> {
+/// Whether the account joined the organisation (`None`: it isn't listed, or declined).
+pub async fn org_joined(pool: &PgPool, org_id: u64, user_id: i64) -> anyhow::Result<Option<bool>> {
+    let joined: Option<Option<bool>> =
+        sqlx::query_scalar("SELECT joined FROM org_members WHERE org_id = $1 AND user_id = $2")
+            .bind(org_id as i64)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(match joined {
+        Some(Some(false)) | None => None,
+        Some(joined) => Some(joined == Some(true)),
+    })
+}
+
+/// Joins or declines an organisation the account is invited to. False if it isn't.
+pub async fn answer_org_invite(pool: &PgPool, org_id: u64, user_id: i64, join: bool) -> anyhow::Result<bool> {
+    Ok(sqlx::query("UPDATE org_members SET joined = $3 WHERE org_id = $1 AND user_id = $2")
+        .bind(org_id as i64)
+        .bind(user_id)
+        .bind(join)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        == 1)
+}
+
+/// Stores `policy` (version `version`) if it is newer than the current one, and lists its
+/// `members` (account IDs) as the organisation's: new ones as invitations, the rest as they were.
+pub async fn put_org_policy(
+    pool: &PgPool,
+    org_id: u64,
+    version: u64,
+    policy: &SignedPolicy,
+    members: &[i64],
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    if !store_policy(&mut tx, org_id, version, policy).await? {
+        return Ok(false);
+    }
+    set_org_members(&mut tx, org_id, members).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+async fn store_policy(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_id: u64,
+    version: u64,
+    policy: &SignedPolicy,
+) -> anyhow::Result<bool> {
     Ok(sqlx::query(
         "INSERT INTO org_policies (org_id, version, policy, signature) VALUES ($1, $2, $3, $4)
          ON CONFLICT (org_id) DO UPDATE SET version = $2, policy = $3, signature = $4, updated_at = now()
@@ -442,10 +509,82 @@ pub async fn put_org_policy(pool: &PgPool, org_id: u64, version: u64, policy: &S
     .bind(version as i64)
     .bind(&policy.policy)
     .bind(&policy.signature)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?
     .rows_affected()
         == 1)
+}
+
+async fn set_org_members(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org_id: u64,
+    members: &[i64],
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM org_members WHERE org_id = $1 AND NOT (user_id = ANY($2))")
+        .bind(org_id as i64)
+        .bind(members)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("INSERT INTO org_members (org_id, user_id) SELECT $1, unnest($2::BIGINT[]) ON CONFLICT DO NOTHING")
+        .bind(org_id as i64)
+        .bind(members)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Replaces the organisation's key: records `rotation` (to policy `version`, signed by the key
+/// `from_pk`, which has to be the current one), stores the policy and lists its `members`, and
+/// replaces every admin's sealed copy with `keys` (account ID, sealed key). False if the key or
+/// the policy changed in the meantime.
+#[allow(clippy::too_many_arguments)]
+pub async fn rotate_org_key(
+    pool: &PgPool,
+    org_id: u64,
+    rotation: &OrgRotation,
+    policy: &SignedPolicy,
+    members: &[i64],
+    keys: &[(i64, Vec<u8>)],
+) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let moved = sqlx::query("UPDATE orgs SET org_pk = $3 WHERE id = $1 AND org_pk = $2")
+        .bind(org_id as i64)
+        .bind(rotation.from_pk.as_slice())
+        .bind(rotation.to_pk.as_slice())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if moved != 1 || !store_policy(&mut tx, org_id, rotation.version, policy).await? {
+        return Ok(false);
+    }
+    sqlx::query("INSERT INTO org_rotations (org_id, version, rotation) VALUES ($1, $2, $3)")
+        .bind(org_id as i64)
+        .bind(rotation.version as i64)
+        .bind(postcard::to_stdvec(rotation)?)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM org_keys WHERE org_id = $1").bind(org_id as i64).execute(&mut *tx).await?;
+    for (user_id, sealed) in keys {
+        sqlx::query("INSERT INTO org_keys (org_id, user_id, sealed_key) VALUES ($1, $2, $3)")
+            .bind(org_id as i64)
+            .bind(user_id)
+            .bind(sealed)
+            .execute(&mut *tx)
+            .await?;
+    }
+    set_org_members(&mut tx, org_id, members).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// The organisation's key rotations, oldest first.
+pub async fn org_rotations(pool: &PgPool, org_id: u64) -> anyhow::Result<Vec<OrgRotation>> {
+    let rows: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT rotation FROM org_rotations WHERE org_id = $1 ORDER BY version")
+            .bind(org_id as i64)
+            .fetch_all(pool)
+            .await?;
+    rows.iter().map(|r| postcard::from_bytes(r).map_err(|_| anyhow::anyhow!("corrupt rotation"))).collect()
 }
 
 pub async fn get_org_key(pool: &PgPool, org_id: u64, user_id: i64) -> anyhow::Result<Option<Vec<u8>>> {

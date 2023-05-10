@@ -11,7 +11,11 @@
 //! Changes made on several devices are merged entry by entry, the newer change winning. A deleted
 //! entry is kept as a tombstone for a while, so the deletion reaches the other devices instead of
 //! the entry coming back from them.
+//!
+//! It also keeps the account's [`OrgPin`]s: the key and newest policy of each organisation the
+//! account administers, merged by the highest version.
 
+use crate::org::OrgPin;
 use crate::server::ServerConn;
 use crate::trust::hex32;
 use crate::{ClientError, Result};
@@ -78,12 +82,16 @@ mod opt_hex32 {
 struct Contents {
     #[serde(default)]
     entries: Vec<Entry>,
+    #[serde(default)]
+    orgs: Vec<OrgPin>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct File {
     #[serde(default)]
     entries: BTreeMap<u64, Entry>,
+    #[serde(default)]
+    orgs: BTreeMap<u64, OrgPin>,
     /// The vault version this book was last merged with.
     #[serde(default)]
     synced_version: u64,
@@ -191,6 +199,18 @@ impl AddressBook {
         }
     }
 
+    /// What the account remembers about organisation `org_id`.
+    pub fn org_pin(&self, org_id: u64) -> Option<&OrgPin> {
+        self.file.orgs.get(&org_id)
+    }
+
+    /// Remembers an organisation's key and policy, unless the book has a newer one already.
+    pub fn pin_org(&mut self, pin: OrgPin) {
+        if self.file.orgs.get(&pin.org_id).is_none_or(|p| p.version < pin.version) {
+            self.file.orgs.insert(pin.org_id, pin);
+        }
+    }
+
     /// Forgets every password saved in the book (e.g. when signing out of the account).
     pub fn clear_passwords(&mut self) {
         for e in self.file.entries.values_mut() {
@@ -201,6 +221,7 @@ impl AddressBook {
     /// Merges `remote` into this book: per entry, the newer change wins (this device's own on a
     /// tie). Returns whether the merged book differs from `remote` (and has to be uploaded).
     fn merge(&mut self, remote: Contents) -> bool {
+        let remote_orgs = remote.orgs;
         let mut remote: BTreeMap<u64, Entry> = remote.entries.into_iter().map(|e| (e.device_id, e)).collect();
         let mut differs = false;
         for (id, local) in std::mem::take(&mut self.file.entries) {
@@ -223,11 +244,24 @@ impl AddressBook {
         self.file.entries.extend(remote);
         let cutoff = now() - TOMBSTONE_MS;
         self.file.entries.retain(|_, e| !(e.deleted && e.modified < cutoff));
+        // Pins: the newest version wins, and only goes forward.
+        let mut remote_orgs: BTreeMap<u64, OrgPin> = remote_orgs.into_iter().map(|p| (p.org_id, p)).collect();
+        for (id, local) in &self.file.orgs {
+            if remote_orgs.get(id).is_none_or(|r| r.version <= local.version) {
+                differs |= remote_orgs.remove(id).is_none_or(|r| r != *local);
+            }
+        }
+        for pin in remote_orgs.into_values() {
+            self.pin_org(pin);
+        }
         differs
     }
 
     fn contents(&self) -> Contents {
-        Contents { entries: self.file.entries.values().cloned().collect() }
+        Contents {
+            entries: self.file.entries.values().cloned().collect(),
+            orgs: self.file.orgs.values().cloned().collect(),
+        }
     }
 
     /// Syncs the book with the account's vault on the server: downloads it, merges, and uploads
@@ -290,7 +324,8 @@ mod tests {
         let mut b = book();
         b.file.entries.insert(1, entry(1, "old name", 100));
         b.file.entries.insert(2, entry(2, "only here", 100));
-        let remote = Contents { entries: vec![entry(1, "new name", 200), entry(3, "only there", 50)] };
+        let remote =
+            Contents { entries: vec![entry(1, "new name", 200), entry(3, "only there", 50)], ..Default::default() };
         assert!(b.merge(remote), "the local-only entry has to go up");
         let labels: Vec<_> = b.entries().iter().map(|e| e.label.clone()).collect();
         assert_eq!(labels, ["new name", "only here", "only there"]);
@@ -303,7 +338,7 @@ mod tests {
         b.remove(1);
         let mut stale = entry(1, "desktop", 0);
         stale.modified = b.file.entries[&1].modified - 10;
-        assert!(b.merge(Contents { entries: vec![stale] }));
+        assert!(b.merge(Contents { entries: vec![stale], ..Default::default() }));
         assert!(b.get(1).is_none(), "the older remote entry doesn't bring it back");
         assert!(b.contents().entries[0].deleted, "the tombstone goes up");
     }
@@ -312,7 +347,21 @@ mod tests {
     fn nothing_to_upload_when_equal() {
         let mut b = book();
         b.file.entries.insert(1, entry(1, "a", 5));
-        assert!(!b.merge(Contents { entries: vec![entry(1, "a", 5)] }));
+        assert!(!b.merge(Contents { entries: vec![entry(1, "a", 5)], ..Default::default() }));
+    }
+
+    #[test]
+    fn organisation_pins_only_go_forward() {
+        let pin = |version: u64| OrgPin { org_id: 9, org_pk: [1; 32], version, policy_hash: [version as u8; 32] };
+        let mut b = book();
+        b.pin_org(pin(5));
+        b.pin_org(pin(3));
+        assert_eq!(b.org_pin(9).unwrap().version, 5, "not back to an older one");
+        assert!(!b.merge(Contents { orgs: vec![pin(5)], ..Default::default() }));
+        assert!(b.merge(Contents { orgs: vec![pin(4)], ..Default::default() }), "ours is newer: it goes up");
+        assert_eq!(b.org_pin(9).unwrap().version, 5);
+        assert!(!b.merge(Contents { orgs: vec![pin(7)], ..Default::default() }));
+        assert_eq!(b.org_pin(9).unwrap().version, 7, "a newer one from another device");
     }
 
     #[test]

@@ -15,7 +15,7 @@
 
 use crate::keys::IdentityKey;
 use crate::CryptoError;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
@@ -165,7 +165,8 @@ pub fn verify_proof(
 ) -> Result<(), CryptoError> {
     let vk = VerifyingKey::from_bytes(recovery_pk).map_err(|_| CryptoError::AuthFailed)?;
     let sig: [u8; 64] = proof.try_into().map_err(|_| CryptoError::AuthFailed)?;
-    vk.verify(&proof_message(username, challenge), &Signature::from_bytes(&sig)).map_err(|_| CryptoError::AuthFailed)
+    vk.verify_strict(&proof_message(username, challenge), &Signature::from_bytes(&sig))
+        .map_err(|_| CryptoError::AuthFailed)
 }
 
 #[cfg(test)]

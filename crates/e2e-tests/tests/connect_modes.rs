@@ -11,6 +11,7 @@ use somedesk_crypto::totp::{self, TotpSecret};
 use somedesk_crypto::vault::VaultKey;
 use somedesk_e2e_tests::{Device, TestServer};
 use somedesk_proto::control::{ErrorCode, Event, SessionId};
+use somedesk_proto::org::PolicyBundle;
 use somedesk_proto::session::SessionMsg;
 use sqlx::{Connection, PgConnection, Row};
 use std::time::Duration;
@@ -41,14 +42,20 @@ async fn next_incoming(
 
 /// Opens a session from `viewer` to `host` and returns both ends.
 async fn open(viewer: &Device, host: &mut Device) -> (Channel, Channel) {
+    let (v, h, _) = open_from(viewer, host).await;
+    (v, h)
+}
+
+/// [`open`], also with the viewer as the server introduced it to the host.
+async fn open_from(viewer: &Device, host: &mut Device) -> (Channel, Channel, somedesk_proto::control::DeviceInfo) {
     let id = host.creds.device_id;
     let host_side = async {
         let (sid, from, cands) = next_incoming(host).await;
-        session::accept(&host.conn, &host.creds, sid, &from, &cands).await.unwrap()
+        (session::accept(&host.conn, &host.creds, sid, &from, &cands).await.unwrap(), from)
     };
-    let ((v, _), h) =
+    let ((v, _), (h, from)) =
         tokio::join!(async { session::connect(&viewer.conn, &viewer.creds, id).await.unwrap() }, host_side);
-    (v, h)
+    (v, h, from)
 }
 
 fn vault_key(d: &Device) -> VaultKey {
@@ -267,46 +274,60 @@ async fn organisations_let_their_members_reach_enrolled_devices() {
     let mut admin = Admin::create(&conn, &login, "ACME").await.unwrap();
     let key = admin.create_worker(&conn, "office rollout", None).await.unwrap();
     let enrollment = somedesk_crypto::org::EnrollmentKey::decode(&key.encode()).unwrap();
+    let org_id = enrollment.org_id;
 
     // A machine enrolls with it, even on a server that only lets in its accounts' devices.
     let (stub_conn, stub_events) = ts.connect().await;
     let stub_creds = stub_conn.enroll_device(&ts.addr, &enrollment, "front-desk").await.unwrap();
     let mut stub = Device { conn: stub_conn, events: stub_events, creds: stub_creds };
-    let stub_id = stub.creds.device_id;
+    let (stub_id, stub_pk) = (stub.creds.device_id, stub.creds.device_key().public());
     let info = jane.conn.lookup_device(stub_id).await.unwrap();
     assert_eq!(info.identity.org.as_ref().map(|c| c.org_name.as_str()), Some("ACME"));
 
-    // Tom joins the support group, which may reach the office devices.
-    admin.add_member(&conn, "tom", "Support", false).await.unwrap();
-    admin.set_device_group(&conn, "Office", vec![stub_id]).await.unwrap();
+    // Tom joins the support group, which may reach the office devices. The organisation shows up
+    // for him as an invitation until he joins it.
+    admin.add_member(&conn, &login, "tom", "Support", false).await.unwrap();
+    admin.set_device_group(&conn, "Office", &[stub_id]).await.unwrap();
+    assert_eq!(admin.policy.device_groups[0].devices[0].device_pk, stub_pk, "named by its key");
+    assert!(admin.set_device_group(&conn, "Office", &[jane.creds.device_id]).await.is_err(), "not enrolled");
     admin.allow(&conn, "Support", "Office").await.unwrap();
+    let invited = tom.conn.list_orgs().await.unwrap();
+    assert!(invited.len() == 1 && !invited[0].joined);
+    assert_eq!(code(tom.conn.list_org_devices(org_id).await), ErrorCode::Forbidden, "not before joining");
+    tom.conn.answer_org_invite(org_id, true).await.unwrap();
+    assert!(tom.conn.list_orgs().await.unwrap()[0].joined);
 
     // The stub takes the newest policy, checked against the key from its enrollment.
-    let mut store = PolicyStore::load(&temp("policy"), enrollment.org_pk);
-    let signed = stub.conn.get_org_policy(enrollment.org_id).await.unwrap().unwrap();
-    assert!(store.update(signed.clone()).unwrap());
-    assert!(!store.update(signed).unwrap(), "not the same version twice");
+    let mut store = PolicyStore::load(&temp("policy"), org_id, enrollment.org_pk);
+    let bundle = stub.conn.get_org_policy(org_id).await.unwrap().unwrap();
+    assert!(store.update(bundle.clone()).unwrap());
+    assert!(!store.update(bundle).unwrap(), "not the same version twice");
 
     let (_, from_tom) = open(&tom, &mut stub).await;
-    assert!(store.allows(&from_tom.peer, stub_id), "tom is in Support, and Support reaches the office");
+    assert!(store.allows(&from_tom.peer, &stub_pk), "tom is in Support, and Support reaches the office");
     let (_, from_jane) = open(&jane, &mut stub).await;
-    assert!(store.allows(&from_jane.peer, stub_id), "admins reach all devices");
+    assert!(store.allows(&from_jane.peer, &stub_pk), "admins reach all devices");
+    assert!(!store.allows(&from_tom.peer, &[7; 32]), "Support reaches no other device");
     let (_, from_eve) = open(&eve, &mut stub).await;
-    assert!(!store.allows(&from_eve.peer, stub_id), "eve isn't a member");
+    assert!(!store.allows(&from_eve.peer, &stub_pk), "eve isn't a member");
 
     // Members see the organisation's devices; the stub never starts a session itself.
-    assert_eq!(tom.conn.list_org_devices(enrollment.org_id).await.unwrap().len(), 1);
-    assert_eq!(code(eve.conn.list_org_devices(enrollment.org_id).await), ErrorCode::Forbidden);
+    assert_eq!(tom.conn.list_org_devices(org_id).await.unwrap().len(), 1);
+    assert_eq!(code(eve.conn.list_org_devices(org_id).await), ErrorCode::Forbidden);
     assert_eq!(code(stub.conn.request_session(jane.creds.device_id).await), ErrorCode::Forbidden);
 
-    // Only admins change the policy, and only with the organisation's key.
+    // Only admins change the policy, only with the organisation's key, and only from the
+    // current version.
     let forged = somedesk_crypto::org::OrgKey::generate().sign_policy(&admin.policy);
-    assert_eq!(code(conn.put_org_policy(enrollment.org_id, forged.clone()).await), ErrorCode::BadRequest);
-    assert!(store.update(forged).is_err(), "the stub doesn't take it either");
+    assert_eq!(code(conn.put_org_policy(org_id, forged.clone()).await), ErrorCode::BadRequest);
+    assert!(store.update(PolicyBundle { policy: forged, rotations: vec![] }).is_err(), "the stub doesn't either");
     let (tom_conn, _) = ts.connect().await;
     tom_conn.login("tom", "correct horse battery").await.unwrap();
     let signed = admin.key.sign_policy(&admin.policy);
-    assert_eq!(code(tom_conn.put_org_policy(enrollment.org_id, signed).await), ErrorCode::Forbidden);
+    assert_eq!(code(tom_conn.put_org_policy(org_id, signed).await), ErrorCode::Forbidden);
+    let mut stale = admin.policy.clone();
+    stale.version += 1;
+    assert_eq!(code(conn.put_org_policy(org_id, admin.key.sign_policy(&stale)).await), ErrorCode::Conflict);
 
     // A revoked worker enrolls nobody else; the devices it enrolled stay.
     admin.revoke_worker(&conn, &enrollment.worker_pk()).await.unwrap();
@@ -317,8 +338,112 @@ async fn organisations_let_their_members_reach_enrolled_devices() {
     assert_eq!(c.authenticate(&mut creds).await.unwrap().device_id, stub_id);
 
     // Removing tom takes effect on the stub with the next policy.
-    admin.remove_member(&conn, "tom").await.unwrap();
+    admin.remove_member(&conn, &login, "tom").await.unwrap();
+    store.update(stub.conn.get_org_policy(org_id).await.unwrap().unwrap()).unwrap();
+    assert!(!store.allows(&from_tom.peer, &stub_pk));
+
+    // Eve, added without asking, can decline: the organisation is gone from her list.
+    admin.add_member(&conn, &login, "eve", "Support", false).await.unwrap();
+    assert_eq!(eve.conn.list_orgs().await.unwrap().len(), 1);
+    eve.conn.answer_org_invite(org_id, false).await.unwrap();
+    assert!(eve.conn.list_orgs().await.unwrap().is_empty());
+    admin.allow(&conn, "Support", "*").await.unwrap();
+    assert!(eve.conn.list_orgs().await.unwrap().is_empty(), "and stays gone");
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn a_departing_admin_takes_no_working_key_along() {
+    let Some(ts) = TestServer::start_with(false).await else { return };
+    ts.signup("jane", "correct horse battery", "jane-laptop").await;
+    ts.signup("tom", "correct horse battery", "tom-laptop").await;
+    let (conn, _) = ts.connect().await;
+    let login = conn.login("jane", "correct horse battery").await.unwrap();
+    let mut admin = Admin::create(&conn, &login, "ACME").await.unwrap();
+    let key = admin.create_worker(&conn, "rollout", None).await.unwrap();
+    let enrollment = somedesk_crypto::org::EnrollmentKey::decode(&key.encode()).unwrap();
+    let org_id = enrollment.org_id;
+    let (stub_conn, _) = ts.connect().await;
+    stub_conn.enroll_device(&ts.addr, &enrollment, "front-desk").await.unwrap();
+    let mut store = PolicyStore::load(&temp("rotation"), org_id, enrollment.org_pk);
+    store.update(stub_conn.get_org_policy(org_id).await.unwrap().unwrap()).unwrap();
+
+    // Tom becomes an admin: jane seals the key to him, and he can tell it came from her.
+    admin.add_member(&conn, &login, "tom", "Admins", true).await.unwrap();
+    let (tom_conn, _) = ts.connect().await;
+    let tom_login = tom_conn.login("tom", "correct horse battery").await.unwrap();
+    tom_conn.answer_org_invite(org_id, true).await.unwrap();
+    let info = tom_conn.list_orgs().await.unwrap().remove(0);
+    let (mut tom_admin, shared_by) = Admin::open(&info, &tom_login, None).unwrap();
+    let shared_by = shared_by.expect("shared by jane");
+    assert_eq!((shared_by.username.as_str(), shared_by.identity_pk), ("jane", login.identity.public()));
+    let old_key = tom_admin.key.to_bytes();
+
+    // Jane removes him: the organisation gets a new key, which he doesn't get.
+    admin.remove_member(&conn, &login, "tom").await.unwrap();
+    assert_ne!(admin.key.public(), enrollment.org_pk);
+    let info = conn.list_orgs().await.unwrap().remove(0);
+    assert_eq!(info.org_pk, admin.key.public());
+    assert_eq!(info.rotations.len(), 1);
+    assert!(tom_conn.list_orgs().await.unwrap().is_empty());
+
+    // The server takes nothing from him any more.
+    assert_eq!(code(tom_admin.allow(&tom_conn, "Admins", "*").await), ErrorCode::Forbidden);
+
+    // The stub follows the rotation from the key it was enrolled with; from then on, whatever
+    // he signs with the old key counts for nothing there either (even if a server handed it
+    // over).
+    assert!(store.update(stub_conn.get_org_policy(org_id).await.unwrap().unwrap()).unwrap());
+    assert!(store.current().unwrap().member("tom").is_none());
+    let mut grab = admin.policy.clone();
+    grab.version += 5;
+    grab.members.push(somedesk_proto::org::OrgMember {
+        username: "tom".into(),
+        identity_pk: tom_login.identity.public(),
+        admin: true,
+    });
+    let old = somedesk_crypto::org::OrgKey::from_bytes(&old_key);
+    assert!(store.update(PolicyBundle { policy: old.sign_policy(&grab), rotations: vec![] }).is_err());
+
+    // A machine enrolled afterwards with the worker key from before follows it too.
+    let (late_conn, _) = ts.connect().await;
+    late_conn.enroll_device(&ts.addr, &enrollment, "back-office").await.unwrap();
+    let mut late = PolicyStore::load(&temp("late"), org_id, enrollment.org_pk);
+    assert!(late.update(late_conn.get_org_policy(org_id).await.unwrap().unwrap()).unwrap());
+
+    // Jane's account remembers the new key: opening the organisation again checks out.
+    let pin = admin.pin();
+    let (reopened, by) = Admin::open(&info, &login, Some(&pin)).unwrap();
+    assert!(by.is_none());
+    assert_eq!(reopened.policy.version, admin.policy.version);
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn a_device_taken_off_an_account_loses_its_organisation_access() {
+    let Some(ts) = TestServer::start_with(false).await else { return };
+    let jane = ts.signup("jane", "correct horse battery", "jane-laptop").await;
+    let (conn, _) = ts.connect().await;
+    let login = conn.login("jane", "correct horse battery").await.unwrap();
+    let mut admin = Admin::create(&conn, &login, "ACME").await.unwrap();
+    let key = admin.create_worker(&conn, "rollout", None).await.unwrap();
+    let enrollment = somedesk_crypto::org::EnrollmentKey::decode(&key.encode()).unwrap();
+    let (stub_conn, stub_events) = ts.connect().await;
+    let stub_creds = stub_conn.enroll_device(&ts.addr, &enrollment, "front-desk").await.unwrap();
+    let mut stub = Device { conn: stub_conn, events: stub_events, creds: stub_creds };
+    let stub_pk = stub.creds.device_key().public();
+    let mut store = PolicyStore::load(&temp("removed"), enrollment.org_id, enrollment.org_pk);
     store.update(stub.conn.get_org_policy(enrollment.org_id).await.unwrap().unwrap()).unwrap();
-    assert!(!store.allows(&from_tom.peer, stub_id));
+
+    // Jane's laptop gets in as hers...
+    let (_, h, from) = open_from(&jane, &mut stub).await;
+    assert!(store.allows(&access::verified_identity(&h.peer, &from.identity), &stub_pk));
+
+    // ...until it is taken off her account (stolen, say). It still has its certificate, but the
+    // server no longer has it on her account, and the stub goes by that.
+    conn.remove_device(jane.creds.device_id).await.unwrap();
+    let (_, h, from) = open_from(&jane, &mut stub).await;
+    assert!(h.peer.account.is_some(), "the laptop still presents its certificate");
+    assert!(!store.allows(&access::verified_identity(&h.peer, &from.identity), &stub_pk));
     ts.stop().await;
 }

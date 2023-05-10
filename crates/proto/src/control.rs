@@ -10,7 +10,7 @@
 // Wire messages are short-lived (serialized right away), so variant size differences don't matter.
 #![allow(clippy::large_enum_variant)]
 
-use crate::org::{OrgDeviceCert, SignedPolicy};
+use crate::org::{OrgDeviceCert, OrgRotation, PolicyBundle, SignedPolicy};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
@@ -132,7 +132,7 @@ pub enum Request {
         username: String,
     },
     /// Creates an organisation with this account as its admin. `sealed_key`: the organisation's
-    /// private key, sealed to the account's identity key.
+    /// private key, sealed by and to the account's identity key.
     CreateOrg {
         name: String,
         org_pk: [u8; 32],
@@ -145,7 +145,8 @@ pub enum Request {
         org_id: u64,
         policy: SignedPolicy,
     },
-    /// Gives another admin the organisation's key (sealed to their identity key).
+    /// Gives another admin the organisation's key (sealed by this account's identity key to
+    /// theirs).
     ShareOrgKey {
         org_id: u64,
         username: String,
@@ -158,6 +159,21 @@ pub enum Request {
     /// The devices enrolled into an organisation (for its members).
     ListOrgDevices {
         org_id: u64,
+    },
+    /// Replaces the organisation's key: the rotation (signed by the current key), the first
+    /// policy the new key signs, and the new key sealed to every admin of that policy (by
+    /// username). Only admins of the current policy can.
+    RotateOrgKey {
+        org_id: u64,
+        rotation: OrgRotation,
+        policy: SignedPolicy,
+        sealed_keys: Vec<(String, Vec<u8>)>,
+    },
+    /// Joins (or declines) an organisation that lists this account as a member. Until then it
+    /// only shows as an invitation.
+    AnswerOrgInvite {
+        org_id: u64,
+        join: bool,
     },
     /// Asks the server to set up a relayed session to `device_id`.
     Connect {
@@ -236,7 +252,7 @@ pub enum Response {
         org_id: u64,
     },
     Orgs(Vec<OrgInfo>),
-    OrgPolicy(Option<SignedPolicy>),
+    OrgPolicy(Option<PolicyBundle>),
     Device(DeviceInfo),
     /// `candidates`: addresses where the host might be reached directly (empty: relay only).
     Connect {
@@ -388,6 +404,10 @@ pub struct OrgInfo {
     /// The organisation's key, sealed to this account's identity key (admins only).
     pub sealed_key: Option<Vec<u8>>,
     pub policy: Option<SignedPolicy>,
+    /// The key rotations so far, oldest first: `org_pk` is where they lead.
+    pub rotations: Vec<OrgRotation>,
+    /// Whether this account joined; otherwise the organisation is only an invitation.
+    pub joined: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -10,7 +10,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     XChaCha20Poly1305, XNonce,
 };
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
@@ -30,6 +30,10 @@ impl IdentityKey {
 
     pub fn public(&self) -> [u8; 32] {
         self.0.verifying_key().to_bytes()
+    }
+
+    pub(crate) fn sign(&self, message: &[u8]) -> [u8; 64] {
+        self.0.sign(message).to_bytes()
     }
 
     /// Encrypts the private key under a key derived from `export_key`.
@@ -127,7 +131,7 @@ pub fn verify_device_cert(cert: &DeviceCert) -> Result<(), CryptoError> {
     let vk = VerifyingKey::from_bytes(&cert.identity_pk).map_err(|_| CryptoError::BadCert("bad identity key"))?;
     let sig: [u8; 64] =
         cert.signature.as_slice().try_into().map_err(|_| CryptoError::BadCert("bad signature length"))?;
-    vk.verify(&cert.signed_bytes(), &Signature::from_bytes(&sig))
+    vk.verify_strict(&cert.signed_bytes(), &Signature::from_bytes(&sig))
         .map_err(|_| CryptoError::BadCert("signature does not verify"))
 }
 

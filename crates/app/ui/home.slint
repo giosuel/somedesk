@@ -152,6 +152,7 @@ export component HomePage inherits Rectangle {
     in property <string> org-selected;
     in property <string> org-name;
     in property <bool> org-admin;
+    in property <bool> org-invited;
     in property <[BookItem]> org-devices;
     in property <[MemberItem]> org-members;
     in property <[RuleItem]> org-rules;
@@ -167,6 +168,7 @@ export component HomePage inherits Rectangle {
     callback org-set-device-group(string, string);
     callback org-new-worker(string);
     callback org-revoke-worker(string);
+    callback org-answer-invite(bool);
     background: Theme.bg;
 
     HorizontalLayout {
@@ -467,6 +469,7 @@ export component HomePage inherits Rectangle {
                 selected: root.org-selected;
                 org-name: root.org-name;
                 org-admin: root.org-admin;
+                org-invited: root.org-invited;
                 devices: root.org-devices;
                 members: root.org-members;
                 rules: root.org-rules;
@@ -483,6 +486,7 @@ export component HomePage inherits Rectangle {
                 set-device-group(n, ids) => { root.org-set-device-group(n, ids); }
                 new-worker(n) => { root.org-new-worker(n); }
                 revoke-worker(k) => { root.org-revoke-worker(k); }
+                answer-invite(join) => { root.org-answer-invite(join); }
             }
 
             if root.view == HomeView.settings: Flickable {

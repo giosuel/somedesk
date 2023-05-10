@@ -80,6 +80,9 @@ fn check_peer(
             return Err(ChannelError::BadPeer("account certificate is for another device".into()));
         }
     }
+    // Only that the certificate is the peer's own: anyone can make a worker key and sign one.
+    // What it says about an organisation counts only once checked against that organisation's
+    // key and policy, by whoever relies on it.
     if let Some(cert) = &identity.org {
         crate::org::verify_device_cert(cert).map_err(|e| ChannelError::BadPeer(e.to_string()))?;
         if cert.device_pk != identity.device_pk {

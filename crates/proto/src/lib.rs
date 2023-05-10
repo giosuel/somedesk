@@ -18,7 +18,7 @@ pub const P2P_ALPN: &[u8] = b"somedesk-p2p/1";
 pub const ALPN: &[u8] = b"somedesk/1";
 
 /// Bumped whenever the control protocol changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Default UDP port of the server.
 pub const DEFAULT_PORT: u16 = 21116;

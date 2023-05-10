@@ -7,7 +7,7 @@ use somedesk_crypto::recovery;
 use somedesk_crypto::totp::{self, TotpSecret};
 use somedesk_proto::control::*;
 use somedesk_proto::frame::{read_msg, write_msg};
-use somedesk_proto::org::{OrgDeviceCert, OrgPolicy};
+use somedesk_proto::org::{policy_hash, OrgDeviceCert, OrgPolicy, PolicyBundle, SignedPolicy};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,9 @@ const MAX_CANDIDATES: usize = 8;
 /// Largest encrypted vault (address book and saved passwords).
 const MAX_VAULT: usize = 1 << 20;
 /// Largest organisation policy.
-const MAX_POLICY: usize = 1 << 20;
+const MAX_POLICY: usize = 256 * 1024;
+/// How many organisations one account can create.
+const MAX_ORGS_PER_ACCOUNT: i64 = 20;
 /// How long after logging in with a code turning two-factor authentication off needs no other.
 const TOTP_FRESH: Duration = Duration::from_secs(600);
 
@@ -674,6 +676,9 @@ impl Ctx {
                 if name.is_empty() || name.len() > MAX_DEVICE_NAME || sealed_key.len() > 256 {
                     return Err(err(ErrorCode::BadRequest, "invalid organisation"));
                 }
+                if db::count_orgs_created_by(&db, user_id).await.map_err(internal)? >= MAX_ORGS_PER_ACCOUNT {
+                    return Err(err(ErrorCode::Forbidden, "this account has created as many organisations as it can"));
+                }
                 let org_id = db::create_org(&db, &name, &org_pk, user_id, &sealed_key).await.map_err(internal)?;
                 db::audit(&db, Some(user_id), None, "org_created", Some(&org_id.to_string())).await;
                 Ok(Response::OrgCreated { org_id })
@@ -682,17 +687,21 @@ impl Ctx {
             Request::ListOrgs => {
                 let user = self.account_user().await?;
                 let mut orgs = Vec::new();
-                for org in db::list_orgs(&db).await.map_err(internal)? {
+                for (org, joined) in db::list_member_orgs(&db, user.id).await.map_err(internal)? {
                     if org_role(&org, &user).is_none() {
                         continue;
                     }
-                    let sealed_key = db::get_org_key(&db, org.id, user.id).await.map_err(internal)?;
+                    let sealed_key =
+                        if joined { db::get_org_key(&db, org.id, user.id).await.map_err(internal)? } else { None };
+                    let rotations = db::org_rotations(&db, org.id).await.map_err(internal)?;
                     orgs.push(OrgInfo {
                         org_id: org.id,
                         name: org.name,
                         org_pk: org.org_pk,
                         sealed_key,
                         policy: org.policy,
+                        rotations,
+                        joined,
                     });
                 }
                 Ok(Response::Orgs(orgs))
@@ -701,15 +710,12 @@ impl Ctx {
             Request::PutOrgPolicy { org_id, policy } => {
                 let user = self.account_user().await?;
                 let org = self.org(org_id).await?;
-                if org_role(&org, &user) != Some(true) {
+                if self.member_role(&org, &user).await? != Some(true) {
                     return Err(err(ErrorCode::Forbidden, "only the organisation's admins can change its policy"));
                 }
-                let decoded = somedesk_crypto::org::verify_policy(&policy, &org.org_pk)
-                    .map_err(|_| err(ErrorCode::BadRequest, "the policy is not signed with the organisation's key"))?;
-                if decoded.org_id != org_id || policy.policy.len() > MAX_POLICY {
-                    return Err(err(ErrorCode::BadRequest, "invalid policy"));
-                }
-                if !db::put_org_policy(&db, org_id, decoded.version, &policy).await.map_err(internal)? {
+                let decoded = self.check_next_policy(&org, &org.org_pk, &policy)?;
+                let members = self.member_ids(&decoded).await?;
+                if !db::put_org_policy(&db, org_id, decoded.version, &policy, &members).await.map_err(internal)? {
                     return Err(err(ErrorCode::Conflict, "a newer policy exists"));
                 }
                 let detail = format!("{org_id} v{}", decoded.version);
@@ -718,10 +724,59 @@ impl Ctx {
                 Ok(Response::Ok)
             }
 
+            Request::RotateOrgKey { org_id, rotation, policy, sealed_keys } => {
+                let user = self.account_user().await?;
+                let org = self.org(org_id).await?;
+                if self.member_role(&org, &user).await? != Some(true) {
+                    return Err(err(ErrorCode::Forbidden, "only the organisation's admins can replace its key"));
+                }
+                let bad = |m: &str| err(ErrorCode::BadRequest, m);
+                let (to_pk, since) =
+                    somedesk_crypto::org::follow_rotations(org_id, &org.org_pk, std::slice::from_ref(&rotation))
+                        .map_err(|_| bad("the key rotation is not signed with the organisation's key"))?;
+                if since == 0 || to_pk == org.org_pk {
+                    return Err(bad("the key rotation doesn't start at the organisation's key"));
+                }
+                let decoded = self.check_next_policy(&org, &to_pk, &policy)?;
+                if decoded.version != rotation.version {
+                    return Err(bad("the key rotation is for another policy"));
+                }
+                // Every admin of the new policy gets the new key, nobody else.
+                let mut keys = Vec::new();
+                for m in decoded.members.iter().filter(|m| m.admin) {
+                    let sealed = sealed_keys.iter().find(|(u, _)| u == &m.username).map(|(_, k)| k);
+                    let target = db::get_user(&db, &m.username).await.map_err(internal)?;
+                    match (sealed, target) {
+                        (Some(k), Some(t)) if k.len() <= 256 && t.identity_pk == m.identity_pk => {
+                            keys.push((t.id, k.clone()))
+                        }
+                        _ => return Err(bad("the new key isn't sealed to every admin")),
+                    }
+                }
+                let members = self.member_ids(&decoded).await?;
+                if !db::rotate_org_key(&db, org_id, &rotation, &policy, &members, &keys).await.map_err(internal)? {
+                    return Err(err(ErrorCode::Conflict, "a newer policy exists"));
+                }
+                let detail = format!("{org_id} v{}", decoded.version);
+                db::audit(&db, Some(user.id), None, "org_key_rotated", Some(&detail)).await;
+                self.broadcast_org_changed(org_id, &decoded).await;
+                Ok(Response::Ok)
+            }
+
+            Request::AnswerOrgInvite { org_id, join } => {
+                let user = self.account_user().await?;
+                if !db::answer_org_invite(&db, org_id, user.id, join).await.map_err(internal)? {
+                    return Err(err(ErrorCode::NotFound, "no invitation to this organisation"));
+                }
+                let detail = format!("{org_id} {}", if join { "joined" } else { "declined" });
+                db::audit(&db, Some(user.id), None, "org_invite", Some(&detail)).await;
+                Ok(Response::Ok)
+            }
+
             Request::ShareOrgKey { org_id, username, sealed_key } => {
                 let user = self.account_user().await?;
                 let org = self.org(org_id).await?;
-                if org_role(&org, &user) != Some(true) {
+                if self.member_role(&org, &user).await? != Some(true) {
                     return Err(err(ErrorCode::Forbidden, "only the organisation's admins can share its key"));
                 }
                 let username = normalize_username(&username)?;
@@ -740,13 +795,14 @@ impl Ctx {
                 if !self.may_read_org(&org).await? {
                     return Err(err(ErrorCode::Forbidden, "not part of this organisation"));
                 }
-                Ok(Response::OrgPolicy(org.policy))
+                let rotations = db::org_rotations(&db, org_id).await.map_err(internal)?;
+                Ok(Response::OrgPolicy(org.policy.map(|policy| PolicyBundle { policy, rotations })))
             }
 
             Request::ListOrgDevices { org_id } => {
                 let user = self.account_user().await?;
                 let org = self.org(org_id).await?;
-                if org_role(&org, &user).is_none() {
+                if self.member_role(&org, &user).await?.is_none() {
                     return Err(err(ErrorCode::Forbidden, "not part of this organisation"));
                 }
                 let devices = db::list_org_devices(&db, org_id).await.map_err(internal)?;
@@ -805,8 +861,13 @@ impl Ctx {
             return Err(bad());
         }
         let org = db::get_org(&self.shared.db, cert.org_id).await.map_err(internal)?.ok_or_else(bad)?;
+        // Enrollment keys carry the organisation key of when they were made; it may have been
+        // replaced since.
         if org.org_pk != cert.org_pk {
-            return Err(bad());
+            let rotations = db::org_rotations(&self.shared.db, org.id).await.map_err(internal)?;
+            if !rotations.iter().any(|r| r.from_pk == cert.org_pk) {
+                return Err(bad());
+            }
         }
         if enrolling {
             let policy = org
@@ -830,9 +891,52 @@ impl Ctx {
             }
         }
         match self.account_user().await {
-            Ok(user) => Ok(org_role(org, &user).is_some()),
+            Ok(user) => Ok(self.member_role(org, &user).await?.is_some()),
             Err(_) => Ok(false),
         }
+    }
+
+    /// [`org_role`], for an account that joined the organisation (not just invited to it).
+    async fn member_role(&self, org: &db::OrgRow, user: &db::UserRow) -> Result<Option<bool>, ErrorInfo> {
+        let Some(role) = org_role(org, user) else { return Ok(None) };
+        let joined = db::org_joined(&self.shared.db, org.id, user.id).await.map_err(internal)?;
+        Ok((joined == Some(true)).then_some(role))
+    }
+
+    /// Checks a policy an admin wants to publish next: signed with `org_pk`, for this
+    /// organisation, made from the current one, and not too large.
+    fn check_next_policy(
+        &self,
+        org: &db::OrgRow,
+        org_pk: &[u8; 32],
+        policy: &SignedPolicy,
+    ) -> Result<OrgPolicy, ErrorInfo> {
+        if policy.policy.len() > MAX_POLICY {
+            return Err(err(ErrorCode::BadRequest, "the policy is too large"));
+        }
+        let decoded = somedesk_crypto::org::verify_policy(policy, org_pk)
+            .map_err(|_| err(ErrorCode::BadRequest, "the policy is not signed with the organisation's key"))?;
+        if decoded.org_id != org.id || i64::try_from(decoded.version).is_err() {
+            return Err(err(ErrorCode::BadRequest, "invalid policy"));
+        }
+        // Two admins changing it at once: the second has to start from the first one's.
+        if decoded.prev_hash != org.policy.as_ref().map_or([0; 32], policy_hash) {
+            return Err(err(ErrorCode::Conflict, "a newer policy exists"));
+        }
+        Ok(decoded)
+    }
+
+    /// The accounts a policy lists (those whose identity key it has right).
+    async fn member_ids(&self, policy: &OrgPolicy) -> Result<Vec<i64>, ErrorInfo> {
+        let mut ids = Vec::new();
+        for m in &policy.members {
+            if let Some(u) = db::get_user(&self.shared.db, &m.username).await.map_err(internal)? {
+                if u.identity_pk == m.identity_pk {
+                    ids.push(u.id);
+                }
+            }
+        }
+        Ok(ids)
     }
 
     fn broadcast_account_changed(&self, user_id: i64) {
