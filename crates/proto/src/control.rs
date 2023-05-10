@@ -31,6 +31,8 @@ pub enum Request {
     RegisterStart {
         username: String,
         message: Vec<u8>,
+        /// The invite code, on a server where only invited people create accounts.
+        invite: Option<String>,
     },
     /// OPAQUE registration, step 2 (`RegistrationUpload`) plus the user's public identity key
     /// and the identity private key encrypted under the password-derived key.
@@ -294,6 +296,9 @@ pub enum ErrorCode {
     /// Changed in the meantime (e.g. the vault, by another device): read it again and retry.
     Conflict,
     Internal,
+    /// The server only creates accounts with an invite code, and there was none (or not a
+    /// valid one).
+    InviteRequired,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
