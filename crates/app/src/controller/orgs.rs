@@ -105,7 +105,8 @@ impl Controller {
     }
 
     fn answer_invite(&self, join: bool) {
-        let (Some(org_id), Some(conn)) = (self.0.state.lock().unwrap().org_selected, self.conn()) else { return };
+        let org_id = self.0.state.lock().unwrap().org_selected;
+        let (Some(org_id), Some(conn)) = (org_id, self.conn()) else { return };
         let this = self.clone();
         self.ui(|ui| ui.set_org_busy(true));
         self.0.rt.spawn(async move {
