@@ -17,7 +17,8 @@ holds. A malicious server can refuse service, but it can't let anyone in.
   stops before connecting and the host's prompt turns into a warning. That's what a malicious
   server would have to do to get in between. Address book entries pin the device key too.
 * **Accounts are optional.** A device works by its ID without one. The server lets in devices
-  without an account unless it runs with `--accounts-only`.
+  without an account unless it runs with `--accounts-only`, which also makes creating an account
+  take an invite code.
 
 ## Accounts
 
@@ -73,18 +74,28 @@ A banner on the host shows every session, however it was let in.
 ## Organisations
 
 * **Organisation key:** Ed25519. The server stores it only sealed to each admin's identity key
-  (X25519 from the Ed25519 key's Montgomery form).
-* **Policy:** members (username and identity key), groups, device groups, rules and service
-  workers, signed by the organisation key with a version and an expiry 30 days out. Enrolled
-  machines accept only a policy that verifies, is newer than the one they have, and hasn't
-  expired.
+  (X25519 from the Ed25519 key's Montgomery form), with the sealing admin's identity key and
+  signature, so an admin knows who shared it and the server can't substitute a key of its own.
+  An account pins each organisation's key and newest policy version in its vault and refuses
+  another key or an older policy.
+* **Policy:** members (username and identity key), groups, device groups (by device key), rules
+  and service workers, signed by the organisation key with a version, the hash of the version
+  before it, and an expiry 30 days out. The server only stores a policy that follows the
+  current one. Enrolled machines accept only a policy that verifies, is newer than the one they
+  have, and hasn't expired.
+* **Key rotation:** removing an admin replaces the organisation key. The old key signs the
+  handover to the new one; enrolled machines follow that chain from the key they were enrolled
+  with, and from then on ignore the old key.
 * **Enrollment:** a service worker key (`sdw1-…`) carries the organisation's ID and public key
   and an Ed25519 worker secret. The agent creates its own device key; the worker signs a
   certificate for it, and the server checks the worker is in the current policy and not revoked
   or expired. The worker key only enrolls: it can't connect to anything.
 * **Admission:** an enrolled machine lets in a member when the policy lists their username with
-  the identity key in their device certificate, and a rule allows their group onto this machine.
-  Enrolled machines can't be reached by ID or password and never start sessions.
+  the identity key in their device certificate, the server still has that device on that account,
+  and a rule allows their group onto this machine's key. Enrolled machines can't be reached by ID
+  or password and never start sessions.
+* **Membership:** a member sees an organisation as an invitation until they join it, and can
+  decline it.
 
 ## Everything else
 

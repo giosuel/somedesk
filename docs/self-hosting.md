@@ -11,11 +11,42 @@ are optional. That suits a server for friends and family, since nobody has to si
 
 To keep the server to people you know, start it with `--accounts-only` (or
 `SOMEDESK_ACCOUNTS_ONLY=true`). Devices then have to sign in to an account on the server before
-they come online. Account creation itself stays open, so put the server where only your people
-reach it, or create the accounts yourself and then firewall it.
+they come online, and creating an account takes an invite code from you:
+
+```sh
+somedesk-server invite                      # one account, never expires
+somedesk-server invite --uses 5 --expires-in 7
+```
+
+It uses the same `DATABASE_URL` as the server (with the containers:
+`podman compose -f packaging/server/compose.yaml exec server somedesk-server invite`). Hand the code
+to the person; the app asks for it when they create their account.
+
+`--registration` (or `SOMEDESK_REGISTRATION`) sets who may create an account on its own: `open`
+(the default without `--accounts-only`), `invite`, or `closed` for no new accounts at all.
 
 The server never decides who may *control* a computer. That's always up to the computer itself
 (see [Ways to connect](connecting.md)).
+
+## Limits
+
+So that one client can't spoil the server for everyone else, the server limits:
+
+- **Wrong passwords:** after a few wrong passwords, recovery keys or authenticator codes for an
+  account, the next try has to wait, from 30 seconds doubling up to an hour. Only wrong attempts
+  count, and a right one starts afresh.
+- **Requests:** how often one address may look up devices, start connections and the like.
+- **Connections:** 64 per address and 20,000 in all (`SOMEDESK_CONNECTIONS_PER_IP`,
+  `SOMEDESK_MAX_CONNECTIONS`). A connection that doesn't sign in within 30 seconds is closed.
+- **Relayed sessions:** 4 per device and 16 per address at once, each at up to 16 MB/s per direction
+  on average (`SOMEDESK_RELAY_SESSIONS_PER_DEVICE`, `SOMEDESK_RELAY_SESSIONS_PER_IP`,
+  `SOMEDESK_RELAY_MBPS`, `0` for no limit). Direct connections don't go through the server.
+- **Old records:** the audit log is kept for 90 days, and devices without an account or
+  organisation that haven't been seen for 180 days are removed
+  (`SOMEDESK_AUDIT_RETENTION_DAYS`, `SOMEDESK_DEVICE_RETENTION_DAYS`, `0` to keep them).
+
+Addresses here count IPv6 networks as one per /64. `packaging/server/server.env.example` lists
+every setting.
 
 ## Building and running
 
