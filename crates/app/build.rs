@@ -1,4 +1,7 @@
+include!("../version.rs");
+
 fn main() {
+    set_version();
     slint_build::compile("ui/app.slint").expect("compiling the Slint UI");
 
     // Windows: embed the app icon and version info in somedesk.exe.

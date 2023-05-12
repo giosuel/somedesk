@@ -5992,14 +5992,14 @@ dependencies = [
 
 [[package]]
 name = "somedesk-android"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "somedesk-app",
 ]
 
 [[package]]
 name = "somedesk-app"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "android_log-sys",
  "anyhow",
@@ -6026,7 +6026,7 @@ dependencies = [
 
 [[package]]
 name = "somedesk-client"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -6051,7 +6051,7 @@ dependencies = [
 
 [[package]]
 name = "somedesk-codec"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "openh264",
@@ -6059,7 +6059,7 @@ dependencies = [
 
 [[package]]
 name = "somedesk-crypto"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -6085,7 +6085,7 @@ dependencies = [
 
 [[package]]
 name = "somedesk-e2e-tests"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "hex",
@@ -6105,7 +6105,7 @@ dependencies = [
 
 [[package]]
 name = "somedesk-platform"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6131,7 +6131,7 @@ dependencies = [
 
 [[package]]
 name = "somedesk-proto"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "postcard",
  "serde",
@@ -6142,7 +6142,7 @@ dependencies = [
 
 [[package]]
 name = "somedesk-server"
-version = "0.3.0"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "clap",

@@ -24,7 +24,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 #[derive(Parser)]
-#[command(name = "somedesk-agent", version, about = "SomeDesk for machines an organisation manages")]
+#[command(name = "somedesk-agent", version = env!("SOMEDESK_VERSION"), about = "SomeDesk for machines an organisation manages")]
 struct Args {
     /// Where the enrollment is kept (default: the user's data directory).
     #[arg(long, env = "SOMEDESK_AGENT_DIR")]
