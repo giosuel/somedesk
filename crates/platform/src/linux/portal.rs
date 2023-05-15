@@ -324,8 +324,14 @@ async fn remote_session(
     setup_tx: std::sync::mpsc::Sender<anyhow::Result<Setup>>,
     mut input: mpsc::UnboundedReceiver<Input>,
 ) {
+    let session = match remote.create_session(Default::default()).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = setup_tx.send(Err(e.into()));
+            return;
+        }
+    };
     let started = async {
-        let session = remote.create_session(Default::default()).await?;
         // Persistence is requested on the remote desktop side; it covers the screen cast too.
         remote
             .select_devices(
@@ -349,24 +355,26 @@ async fn remote_session(
         let fd = cast.open_pipe_wire_remote(&session, Default::default()).await?;
         let restore_token = response.restore_token().map(str::to_owned);
         let setup = Setup { fd, node_id, size, position, restore_token, can_control, has_remote_input: true };
-        Ok::<_, anyhow::Error>((session, setup))
+        Ok::<_, anyhow::Error>(setup)
     }
     .await;
 
-    let session = match started {
-        Ok((session, setup)) => {
+    match started {
+        Ok(setup) => {
             tracing::info!(node_id = setup.node_id, size = ?setup.size, "portal session started");
             if setup_tx.send(Ok(setup)).is_err() {
                 let _ = session.close().await;
                 return;
             }
-            session
         }
         Err(e) => {
+            // Closing the session also takes down a permission dialog still on screen (after a
+            // timeout), so it can't start a session nobody uses when someone clicks it later.
+            let _ = session.close().await;
             let _ = setup_tx.send(Err(e));
             return;
         }
-    };
+    }
 
     while let Some(ev) = input.recv().await {
         let res = match ev {
@@ -396,8 +404,14 @@ async fn cast_only_session(
     setup_tx: std::sync::mpsc::Sender<anyhow::Result<Setup>>,
     mut input: mpsc::UnboundedReceiver<Input>,
 ) {
+    let session = match cast.create_session(Default::default()).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = setup_tx.send(Err(e.into()));
+            return;
+        }
+    };
     let started = async {
-        let session = cast.create_session(Default::default()).await?;
         let options = source_options(&cast)
             .await
             .set_persist_mode(PersistMode::ExplicitlyRevoked)
@@ -409,12 +423,12 @@ async fn cast_only_session(
         let fd = cast.open_pipe_wire_remote(&session, Default::default()).await?;
         let restore_token = response.restore_token().map(str::to_owned);
         let setup = Setup { fd, node_id, size, position, restore_token, can_control: false, has_remote_input: false };
-        Ok::<_, anyhow::Error>((session, setup))
+        Ok::<_, anyhow::Error>(setup)
     }
     .await;
 
     match started {
-        Ok((session, setup)) => {
+        Ok(setup) => {
             tracing::info!(node_id = setup.node_id, size = ?setup.size, "portal session started (view-only)");
             if setup_tx.send(Ok(setup)).is_ok() {
                 // No way to inject input; just wait for the session to end.
@@ -423,6 +437,8 @@ async fn cast_only_session(
             let _ = session.close().await;
         }
         Err(e) => {
+            // As in `remote_session`: also dismisses a dialog left open by a timeout.
+            let _ = session.close().await;
             let _ = setup_tx.send(Err(e));
         }
     }
