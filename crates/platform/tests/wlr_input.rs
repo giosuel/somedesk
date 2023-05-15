@@ -147,6 +147,7 @@ fn wait_until(queue: &mut EventQueue<Window>, window: &mut Window, what: &str, d
 #[test]
 fn input_reaches_a_window_on_sway() {
     let Some(_sway) = start_sway() else { return };
+    assert!(somedesk_platform::linux::wlr::available(), "sway offers virtual input");
     let mut injector = WlrInjector::open(None, None).expect("virtual input devices");
     assert_eq!(injector.screen_size().unwrap(), (WIDTH, HEIGHT));
 

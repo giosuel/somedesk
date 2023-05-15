@@ -316,11 +316,19 @@ impl Controller {
             None => format!("ID {} · not signed in to an account", format_device_id(device_id)),
         };
         let fp = fingerprint(&peer.device_pk);
-        let note = if somedesk_platform::will_ask_permission(Some(&self.0.dir)) {
-            "Your desktop will then ask what to share. Choose Share, and turn on \"Allow Remote Interaction\" so \
-             they can use the mouse and keyboard. You will only be asked once."
-        } else {
-            ""
+        let asks = somedesk_platform::will_ask_permission(Some(&self.0.dir));
+        let note = match (asks, somedesk_platform::control_without_desktop_consent()) {
+            // Hyprland, Sway: the desktop asks about the screen only.
+            (true, true) => {
+                "Your desktop will then ask which screen to share. Accepting also lets them use the mouse and \
+                 keyboard: your desktop doesn't ask about that. You will only be asked once."
+            }
+            (false, true) => "Accepting lets them see your screen and use the mouse and keyboard.",
+            (true, false) => {
+                "Your desktop will then ask what to share. Choose Share, and turn on \"Allow Remote Interaction\" so \
+                 they can use the mouse and keyboard. You will only be asked once."
+            }
+            (false, false) => "",
         };
         self.ui(move |ui| {
             ui.set_incoming_note(note.into());

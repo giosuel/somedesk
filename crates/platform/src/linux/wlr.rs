@@ -56,6 +56,16 @@ pub struct WlrInjector {
     started: Instant,
 }
 
+/// Whether the compositor offers the virtual pointer and keyboard protocols.
+pub fn available() -> bool {
+    let Ok(conn) = Connection::connect_to_env() else { return false };
+    let Ok((globals, _)) = registry_queue_init::<State>(&conn) else { return false };
+    globals.contents().with_list(|list| {
+        let has = |name: &str| list.iter().any(|g| g.interface == name);
+        has(ZwlrVirtualPointerManagerV1::interface().name) && has(ZwpVirtualKeyboardManagerV1::interface().name)
+    })
+}
+
 impl WlrInjector {
     /// Connects to the compositor and creates the virtual devices. `position` and `size` are
     /// the logical position and size of the monitor the portal shares, if it reported them.
