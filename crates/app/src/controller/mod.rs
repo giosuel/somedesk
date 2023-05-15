@@ -138,6 +138,10 @@ struct State {
     online_task: Option<JoinHandle<()>>,
     viewer_task: Option<JoinHandle<()>>,
     viewer_input: Option<mpsc::UnboundedSender<SessionMsg>>,
+    /// Keys and mouse buttons held down on the remote computer, to let go of when the viewer
+    /// window loses the focus (their releases go to another window then).
+    held_keys: std::collections::HashSet<u32>,
+    held_buttons: std::collections::HashSet<u8>,
     scroll_acc: (f32, f32),
     /// The phone's hidden keyboard input as of the last edit.
     soft_text: String,
@@ -578,6 +582,8 @@ impl Controller {
                 c.send_input(SessionMsg::Key { keysym, down });
             }
         });
+        let c = self.clone();
+        ui.on_release_input(move || c.release_input());
         let c = self.clone();
         ui.on_soft_input(move |text, ctrl, alt| c.soft_input(&text, ctrl, alt));
         let c = self.clone();
