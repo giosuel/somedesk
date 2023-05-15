@@ -6,6 +6,7 @@
 
 use crate::{Capturer, Frame, Injector, Monitor};
 use anyhow::{anyhow, bail};
+use std::collections::HashMap;
 use std::mem::size_of;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{LPARAM, RECT};
@@ -15,14 +16,15 @@ use windows::Win32::Graphics::Gdi::{
     MONITORINFO, MONITORINFOEXW, SRCCOPY,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
-    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+    GetAsyncKeyState, GetKeyboardLayout, SendInput, VkKeyScanExW, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE,
+    KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE,
+    MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+    MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+    MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, MONITORINFOF_PRIMARY, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, WHEEL_DELTA,
+    GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, MONITORINFOF_PRIMARY, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WHEEL_DELTA,
 };
 
 /// The virtual desktop: (x, y, width, height) in screen coordinates.
@@ -151,12 +153,47 @@ unsafe fn grab(x: i32, y: i32, w: i32, h: i32) -> anyhow::Result<Vec<u8>> {
     result
 }
 
-pub struct SendInputInjector;
+pub struct SendInputInjector {
+    /// How each held key went down, so it goes up the same way even if the modifiers changed.
+    held: HashMap<u32, Pressed>,
+}
+
+#[derive(Clone, Copy)]
+enum Pressed {
+    Key { vk: u16, extended: bool },
+    Text,
+}
 
 impl SendInputInjector {
     pub fn open() -> anyhow::Result<Self> {
-        Ok(Self)
+        Ok(Self { held: HashMap::new() })
     }
+}
+
+/// The virtual key that types `ch` on the keyboard layout of the window in front, if pressing it
+/// with the modifiers held right now types `ch`.
+fn layout_vk(ch: char) -> Option<u16> {
+    let mut units = [0u16; 2];
+    let &mut [unit] = ch.encode_utf16(&mut units) else { return None };
+    let held = |vk: u16| unsafe { GetAsyncKeyState(vk as i32) } < 0;
+    let scan = unsafe {
+        let thread = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        VkKeyScanExW(unit, GetKeyboardLayout(thread))
+    };
+    usable_vk(scan, held(0x10), held(0x11), held(0x12))
+}
+
+/// The virtual key from a `VkKeyScanExW` result (key in the low byte, the Shift (1), Ctrl (2)
+/// and Alt (4) it needs in the high byte), if it can be used with these modifiers held. Shift
+/// has to match. Ctrl and Alt have to be held if the character needs them (AltGr is Ctrl+Alt),
+/// and may be held if not: that is a shortcut like Ctrl+/ or Ctrl+-.
+fn usable_vk(scan: i16, shift: bool, ctrl: bool, alt: bool) -> Option<u16> {
+    if scan == -1 {
+        return None;
+    }
+    let (vk, needs) = (scan as u16 & 0xff, (scan as u16) >> 8);
+    let ok = needs & !7 == 0 && (needs & 1 != 0) == shift && (needs & 2 == 0 || ctrl) && (needs & 4 == 0 || alt);
+    ok.then_some(vk)
 }
 
 fn mouse(flags: MOUSE_EVENT_FLAGS, dx: i32, dy: i32, data: i32) -> INPUT {
@@ -229,12 +266,29 @@ impl Injector for SendInputInjector {
 
     fn key(&mut self, keysym: u32, down: bool) -> anyhow::Result<()> {
         let up = if down { KEYBD_EVENT_FLAGS(0) } else { KEYEVENTF_KEYUP };
-        if let Some((vk, extended)) = vk_for_keysym(keysym) {
+        let ch = crate::keysym_char(keysym);
+        let held = if down { self.held.get(&keysym).copied() } else { self.held.remove(&keysym) };
+        let pressed = match held {
+            Some(p) => p,
+            None => match vk_for_keysym(keysym) {
+                Some((vk, extended)) => Pressed::Key { vk, extended },
+                // Punctuation as a key of the computer's layout where it has one, so shortcuts
+                // like Ctrl+/ work; else as text.
+                None => match ch.and_then(layout_vk) {
+                    Some(vk) => Pressed::Key { vk, extended: false },
+                    None => Pressed::Text,
+                },
+            },
+        };
+        if down {
+            self.held.insert(keysym, pressed);
+        }
+        if let Pressed::Key { vk, extended } = pressed {
             let flags = if extended { up | KEYEVENTF_EXTENDEDKEY } else { up };
             return send(&[keyboard(vk, 0, flags)]);
         }
         // Anything else is typed as the Unicode character it stands for.
-        let Some(ch) = crate::keysym_char(keysym) else { bail!("no key for keysym {keysym:#x}") };
+        let Some(ch) = ch else { bail!("no key for keysym {keysym:#x}") };
         let mut units = [0u16; 2];
         let inputs: Vec<INPUT> =
             ch.encode_utf16(&mut units).iter().map(|&u| keyboard(0, u, KEYEVENTF_UNICODE | up)).collect();
@@ -297,6 +351,21 @@ mod tests {
         assert_eq!(vk_for_keysym(0x0100_263a), None);
     }
 
+    #[test]
+    fn layout_keys_need_the_right_modifiers() {
+        let slash = 0xbf; // VK_OEM_2, no modifiers (US)
+        assert_eq!(usable_vk(slash, false, false, false), Some(0xbf));
+        assert_eq!(usable_vk(slash, false, true, false), Some(0xbf), "Ctrl+/");
+        assert_eq!(usable_vk(slash, true, false, false), None, "Shift would make it '?'");
+        let at_us = 0x132; // Shift+2
+        assert_eq!(usable_vk(at_us, true, false, false), Some(0x32));
+        assert_eq!(usable_vk(at_us, false, false, false), None);
+        let at_de = 0x651; // Ctrl+Alt+Q (AltGr)
+        assert_eq!(usable_vk(at_de, false, true, true), Some(0x51));
+        assert_eq!(usable_vk(at_de, true, false, false), None, "a US viewer's Shift+2: typed as text");
+        assert_eq!(usable_vk(-1, false, false, false), None);
+    }
+
     /// Runs against the real desktop (or Wine): capture something and move the pointer.
     #[test]
     fn capture_and_pointer_on_the_desktop() {
@@ -324,6 +393,10 @@ mod tests {
         inj.key(0x61, false).unwrap();
         inj.key(0x0100_263a, true).unwrap();
         inj.key(0x0100_263a, false).unwrap();
+        inj.key(0x2f, true).unwrap(); // '/' through the layout
+        assert!(matches!(inj.held.get(&0x2f), Some(Pressed::Key { .. })), "'/' is a key on a US layout");
+        inj.key(0x2f, false).unwrap();
+        assert!(inj.held.is_empty());
         inj.scroll(0, 1).unwrap();
     }
 }
