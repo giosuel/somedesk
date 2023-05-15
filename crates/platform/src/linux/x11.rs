@@ -108,65 +108,213 @@ pub struct X11Injector {
     conn: RustConnection,
     root: Window,
     min_keycode: Keycode,
+    max_keycode: Keycode,
     per_keycode: usize,
     /// Keysyms of every keycode, `per_keycode` entries each, starting at `min_keycode`.
     keysyms: Vec<Keysym>,
+    /// The modifier bit that selects the third level (the one `ISO_Level3_Shift`, AltGr, sets).
+    level3_mask: u16,
     /// Keycodes with no keysyms, which we can temporarily remap for characters the layout lacks.
     spare: Vec<Keycode>,
     next_spare: usize,
     remapped: HashMap<Keysym, Keycode>,
+    /// Keys held down and the keycode each one went down on, so it is released on that keycode
+    /// even if the mapping changed in between.
+    held: HashMap<Keysym, Keycode>,
 }
+
+const SHIFT_MASK: u16 = 1;
+const LOCK_MASK: u16 = 2;
+const ISO_LEVEL3_SHIFT: Keysym = 0xfe03;
 
 impl X11Injector {
     pub fn open(display: Option<&str>) -> anyhow::Result<Self> {
         let (conn, root) = connect(display)?;
         conn.xtest_get_version(2, 2)?.reply().context("the XTEST extension is not available")?;
         let (min, max) = (conn.setup().min_keycode, conn.setup().max_keycode);
-        let map = conn.get_keyboard_mapping(min, max - min + 1)?.reply()?;
-        let per = map.keysyms_per_keycode as usize;
-        let spare = (min..=max)
-            .filter(|kc| {
-                let i = (kc - min) as usize * per;
-                map.keysyms[i..i + per].iter().all(|&k| k == 0)
-            })
-            .collect();
-        Ok(Self {
+        let mut injector = Self {
             conn,
             root,
             min_keycode: min,
-            per_keycode: per,
-            keysyms: map.keysyms,
-            spare,
+            max_keycode: max,
+            per_keycode: 0,
+            keysyms: Vec::new(),
+            level3_mask: 0x80,
+            spare: Vec::new(),
             next_spare: 0,
             remapped: HashMap::new(),
-        })
+            held: HashMap::new(),
+        };
+        injector.load_mapping()?;
+        Ok(injector)
     }
 
+    /// Reads the keyboard and modifier mapping, at the start and whenever it changes.
+    fn load_mapping(&mut self) -> anyhow::Result<()> {
+        let (min, max) = (self.min_keycode, self.max_keycode);
+        let map = self.conn.get_keyboard_mapping(min, max - min + 1)?.reply()?;
+        self.per_keycode = (map.keysyms_per_keycode as usize).max(1);
+        self.keysyms = map.keysyms;
+        // Our remaps survive changes made by others only if the keycode still has our keysym
+        // (a new layout replaces the whole map).
+        let remapped = std::mem::take(&mut self.remapped);
+        self.remapped = remapped.into_iter().filter(|&(k, kc)| self.syms(kc).contains(&k)).collect();
+        self.spare = (min..=max)
+            .filter(|&kc| self.syms(kc).iter().all(|&k| k == 0) || self.remapped.values().any(|&r| r == kc))
+            .collect();
+        let mods = self.conn.get_modifier_mapping()?.reply()?;
+        let per_mod = (mods.keycodes.len() / 8).max(1);
+        self.level3_mask = mods
+            .keycodes
+            .chunks(per_mod)
+            .position(|kcs| kcs.iter().any(|&kc| kc != 0 && self.syms(kc).contains(&ISO_LEVEL3_SHIFT)))
+            .map_or(0x80, |i| 1 << i);
+        Ok(())
+    }
+
+    /// The keysyms of `kc`.
+    fn syms(&self, kc: Keycode) -> &[Keysym] {
+        let i = kc.wrapping_sub(self.min_keycode) as usize * self.per_keycode;
+        self.keysyms.get(i..i + self.per_keycode).unwrap_or(&[])
+    }
+
+    fn keycodes(&self) -> impl Iterator<Item = Keycode> {
+        self.min_keycode..=self.max_keycode
+    }
+
+    /// Picks up a keyboard mapping change (another layout, or our own remap) reported by the
+    /// X server since the last call.
+    fn handle_events(&mut self) -> anyhow::Result<()> {
+        let mut changed = false;
+        while let Some(event) = self.conn.poll_for_event()? {
+            if let x11rb::protocol::Event::MappingNotify(e) = event {
+                changed |= e.request != x11rb::protocol::xproto::Mapping::POINTER;
+            }
+        }
+        if changed {
+            self.load_mapping()?;
+        }
+        Ok(())
+    }
+
+    /// The keycode to press for `keysym`: one that types it with the modifiers held right now
+    /// (Shift, AltGr, Caps Lock), or else a spare keycode remapped to it.
     fn keycode_for(&mut self, keysym: Keysym) -> anyhow::Result<Keycode> {
-        if let Some(pos) = self.keysyms.iter().position(|&k| k == keysym) {
-            return Ok(self.min_keycode + (pos / self.per_keycode) as u8);
+        let state = u16::from(self.conn.query_pointer(self.root)?.reply()?.mask);
+        self.handle_events()?;
+        let level = usize::from(state & SHIFT_MASK != 0) + if state & self.level3_mask != 0 { 2 } else { 0 };
+        let (group, lock) = (usize::from((state >> 13) & 3), state & LOCK_MASK != 0);
+        let borrowed = |kc: &Keycode| self.remapped.values().any(|r| r == kc);
+        if let Some(kc) =
+            self.keycodes().find(|kc| !borrowed(kc) && level_keysym(self.syms(*kc), group, level, lock) == keysym)
+        {
+            return Ok(kc);
         }
         if let Some(&kc) = self.remapped.get(&keysym) {
             return Ok(kc);
         }
-        // Not on the current layout: borrow a spare keycode (the same trick xdotool uses).
-        if self.spare.is_empty() {
-            bail!("no spare keycode available for keysym {keysym:#x}");
+        // Keys that don't type a character (Tab, arrows, modifiers) keep their own key on any
+        // level: Shift+Tab has to be Shift plus the Tab key.
+        if crate::keysym_char(keysym).is_none() {
+            if let Some(kc) = self.any_keycode(keysym) {
+                return Ok(kc);
+            }
         }
-        let kc = self.spare[self.next_spare % self.spare.len()];
-        self.next_spare += 1;
+        // Not on the current layout at this level: borrow a spare keycode (the same trick
+        // xdotool uses), but never one a held key is still down on.
+        let n = self.spare.len();
+        let Some(kc) =
+            (0..n).map(|i| self.spare[(self.next_spare + i) % n]).find(|kc| !self.held.values().any(|h| h == kc))
+        else {
+            bail!("no spare keycode available for keysym {keysym:#x}");
+        };
+        self.next_spare = self.spare.iter().position(|&s| s == kc).unwrap_or(0) + 1;
         self.remapped.retain(|_, v| *v != kc);
         let syms = vec![keysym; self.per_keycode];
         self.conn.change_keyboard_mapping(1, kc, self.per_keycode as u8, &syms)?;
         self.conn.sync()?;
+        let i = (kc - self.min_keycode) as usize * self.per_keycode;
+        self.keysyms[i..i + self.per_keycode].copy_from_slice(&syms);
         self.remapped.insert(keysym, kc);
         Ok(kc)
+    }
+
+    /// A keycode with `keysym` on any level, or remapped to it.
+    fn any_keycode(&self, keysym: Keysym) -> Option<Keycode> {
+        self.keycodes().find(|&kc| self.syms(kc).contains(&keysym)).or_else(|| self.remapped.get(&keysym).copied())
     }
 
     fn fake(&self, kind: u8, detail: u8, x: i16, y: i16) -> anyhow::Result<()> {
         self.conn.xtest_fake_input(kind, detail, x11rb::CURRENT_TIME, self.root, x, y, 0)?;
         self.conn.flush()?;
         Ok(())
+    }
+}
+
+impl Drop for X11Injector {
+    fn drop(&mut self) {
+        // Let go of anything still held, and give the borrowed keycodes back: the keyboard
+        // mapping belongs to the whole X server and would otherwise keep our remaps.
+        for (_, kc) in std::mem::take(&mut self.held) {
+            let _ = self.fake(KEY_RELEASE_EVENT, kc, 0, 0);
+        }
+        let _ = self.handle_events();
+        let none = vec![0; self.per_keycode];
+        for (&keysym, &kc) in &self.remapped {
+            if self.syms(kc).contains(&keysym) {
+                let _ = self.conn.change_keyboard_mapping(1, kc, self.per_keycode as u8, &none);
+            }
+        }
+        let _ = self.conn.sync();
+    }
+}
+
+/// The lower- and uppercase form of a Latin-1 letter keysym, or the keysym twice.
+fn case_pair(k: Keysym) -> (Keysym, Keysym) {
+    match k {
+        0x41..=0x5a | 0xc0..=0xd6 | 0xd8..=0xde => (k + 0x20, k),
+        0x61..=0x7a | 0xe0..=0xf6 | 0xf8..=0xfe => (k, k - 0x20),
+        _ => (k, k),
+    }
+}
+
+/// The keysym a key with the core keysym list `syms` types in `group` at `level` (Shift adds
+/// one, the level-3 modifier two), with Caps Lock `lock` on. Follows the core protocol's rules
+/// for the first two columns of a group, and XKB's layout of the core map, which puts the third
+/// and fourth level of the first group in columns 4 and 5. Returns NoSymbol (0) where it can't
+/// tell, so a spare keycode is used instead.
+fn level_keysym(syms: &[Keysym], group: usize, level: usize, lock: bool) -> Keysym {
+    let at = |i: usize| syms.get(i).copied().unwrap_or(0);
+    let mut level = level;
+    if level >= 2 {
+        if group != 0 {
+            return 0;
+        }
+        if at(4) != 0 || at(5) != 0 {
+            return match at(4 + level - 2) {
+                0 => at(4),
+                k => k,
+            };
+        }
+        // A key without a third level ignores the level-3 modifier.
+        level -= 2;
+    }
+    let base = match group {
+        0 => 0,
+        // A key without a second group uses its first one.
+        1 if at(2) != 0 || at(3) != 0 => 2,
+        1 => 0,
+        _ => return 0,
+    };
+    let (lower, upper) = match (at(base), at(base + 1)) {
+        (a, 0) => case_pair(a),
+        (a, b) => (a, b),
+    };
+    let alphabetic = lower != upper && case_pair(lower) == (lower, upper);
+    if (level == 1) ^ (lock && alphabetic) {
+        upper
+    } else {
+        lower
     }
 }
 
@@ -200,8 +348,19 @@ impl Injector for X11Injector {
     }
 
     fn key(&mut self, keysym: u32, down: bool) -> anyhow::Result<()> {
-        let kc = self.keycode_for(keysym)?;
-        self.fake(if down { KEY_PRESS_EVENT } else { KEY_RELEASE_EVENT }, kc, 0, 0)
+        if !down {
+            let Some(kc) = self.held.remove(&keysym).or_else(|| self.any_keycode(keysym)) else {
+                return Ok(());
+            };
+            return self.fake(KEY_RELEASE_EVENT, kc, 0, 0);
+        }
+        // Auto-repeat goes to the key that is already down.
+        let kc = match self.held.get(&keysym) {
+            Some(&kc) => kc,
+            None => self.keycode_for(keysym)?,
+        };
+        self.held.insert(keysym, kc);
+        self.fake(KEY_PRESS_EVENT, kc, 0, 0)
     }
 }
 
@@ -283,6 +442,117 @@ mod tests {
         inj.key(smiley, false).unwrap();
         inj.conn.sync().unwrap();
         assert!(!keycode_is_down(&conn, kc));
+    }
+
+    #[test]
+    fn levels_follow_the_core_rules() {
+        let de_q = [0x71, 0x51, 0x71, 0x51, 0x40, 0x7d9]; // q Q q Q at Greek_OMEGA
+        assert_eq!(level_keysym(&de_q, 0, 0, false), 0x71);
+        assert_eq!(level_keysym(&de_q, 0, 1, false), 0x51);
+        assert_eq!(level_keysym(&de_q, 0, 0, true), 0x51, "Caps Lock shifts letters");
+        assert_eq!(level_keysym(&de_q, 0, 1, true), 0x71);
+        assert_eq!(level_keysym(&de_q, 0, 2, false), 0x40, "AltGr");
+        let two = [0x32, 0x40]; // 2 at
+        assert_eq!(level_keysym(&two, 0, 0, true), 0x32, "Caps Lock leaves digits alone");
+        assert_eq!(level_keysym(&two, 0, 2, false), 0x32, "no third level: AltGr is ignored");
+        assert_eq!(level_keysym(&two, 1, 1, false), 0x40, "no second group: the first one");
+        let one = [0xff53]; // Right
+        assert_eq!(level_keysym(&one, 0, 1, false), 0xff53);
+        let lone_letter = [0x61];
+        assert_eq!(level_keysym(&lone_letter, 0, 1, false), 0x41, "a lone letter has both cases");
+    }
+
+    /// Runs `f` with the test display switched to keyboard layout `layout`, then back to "us".
+    fn with_layout(d: &str, layout: &str, f: impl FnOnce()) {
+        let setxkbmap = |l: &str| std::process::Command::new("setxkbmap").arg("-display").arg(d).arg(l).status();
+        match setxkbmap(layout) {
+            Ok(s) if s.success() => {}
+            _ => {
+                eprintln!("setxkbmap {layout} failed, skipping");
+                return;
+            }
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        let _ = setxkbmap("us");
+        result.unwrap();
+    }
+
+    #[test]
+    fn characters_on_other_levels_of_a_german_layout() {
+        let Some(d) = display() else { return };
+        let (conn, _) = connect(Some(&d)).unwrap();
+        // Opened on the US layout: the layout switch below must be picked up.
+        let _ = std::process::Command::new("setxkbmap").arg("-display").arg(&d).arg("us").status();
+        let mut inj = X11Injector::open(Some(&d)).unwrap();
+        let mapping = |kc: u8| conn.get_keyboard_mapping(kc, 1).unwrap().reply().unwrap().keysyms;
+        with_layout(&d, "de", || {
+            const AT: u32 = 0x40;
+            // A US viewer types '@' as Shift+2. On a German host Shift+2 is '"' and '@' is
+            // AltGr+Q (Shift+Q would be 'Q'), so a borrowed key has to type it.
+            inj.key(0xffe1, true).unwrap();
+            inj.key(AT, true).unwrap();
+            inj.conn.sync().unwrap();
+            let kc = inj.held[&AT];
+            assert!(keycode_is_down(&conn, kc));
+            assert_eq!(mapping(kc)[1], AT, "the key types '@' with Shift held");
+            inj.key(AT, false).unwrap();
+            inj.key(0xffe1, false).unwrap();
+            inj.conn.sync().unwrap();
+            assert!(!keycode_is_down(&conn, kc));
+
+            // A German viewer types it as AltGr+Q: that is the host's own key.
+            inj.key(ISO_LEVEL3_SHIFT, true).unwrap();
+            inj.key(AT, true).unwrap();
+            let kc = inj.held[&AT];
+            inj.key(AT, false).unwrap();
+            inj.key(ISO_LEVEL3_SHIFT, false).unwrap();
+            inj.conn.sync().unwrap();
+            assert_eq!(mapping(kc)[0], 0x71, "AltGr+@ goes to the Q key");
+            assert_eq!(mapping(kc)[4], AT);
+
+            // Without modifiers (the phone's keyboard sends just the character) it's no Q either.
+            inj.key(AT, true).unwrap();
+            let kc = inj.held[&AT];
+            inj.key(AT, false).unwrap();
+            assert_eq!(mapping(kc)[0], AT);
+        });
+    }
+
+    #[test]
+    fn held_keys_keep_their_spare_keycode() {
+        let Some(d) = display() else { return };
+        let mut inj = X11Injector::open(Some(&d)).unwrap();
+        let (conn, _) = connect(Some(&d)).unwrap();
+        inj.spare.truncate(2);
+        let held = 0x0100_2600;
+        inj.key(held, true).unwrap();
+        let kc = inj.held[&held];
+        // More unusual keysyms than spare keycodes while the first one is still down.
+        for k in 0x0100_2601..0x0100_2605 {
+            inj.key(k, true).unwrap();
+            inj.key(k, false).unwrap();
+            assert_ne!(inj.held.get(&k), Some(&kc));
+        }
+        inj.conn.sync().unwrap();
+        assert!(keycode_is_down(&conn, kc));
+        assert_eq!(conn.get_keyboard_mapping(kc, 1).unwrap().reply().unwrap().keysyms[0], held);
+        inj.key(held, false).unwrap();
+        inj.conn.sync().unwrap();
+        assert!(!keycode_is_down(&conn, kc));
+    }
+
+    #[test]
+    fn remaps_are_undone_on_drop() {
+        let Some(d) = display() else { return };
+        let mut inj = X11Injector::open(Some(&d)).unwrap();
+        let smiley = 0x0100_263B;
+        inj.key(smiley, true).unwrap();
+        let kc = inj.remapped[&smiley];
+        drop(inj);
+        let (conn, _) = connect(Some(&d)).unwrap();
+        assert!(!keycode_is_down(&conn, kc), "released on drop");
+        let map = conn.get_keyboard_mapping(kc, 1).unwrap().reply().unwrap();
+        assert!(map.keysyms.iter().all(|&k| k == 0), "{:x?}", map.keysyms);
     }
 
     #[test]
