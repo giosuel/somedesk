@@ -23,6 +23,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Wrong attempts allowed before the host makes the next one wait.
+///
+/// The count is one for the whole host, not one per viewer: device keys cost nothing to make, so
+/// a guesser would simply use a fresh one for every attempt. The price is that anyone who can
+/// reach the host can keep unattended access locked (for at most [`MAX_LOCK`] at a time); asking
+/// the person at the host and same-account access keep working meanwhile.
 const FREE_ATTEMPTS: u32 = 3;
 /// The first wait, doubling with every further wrong attempt, up to [`MAX_LOCK`].
 const FIRST_LOCK: i64 = 30;
