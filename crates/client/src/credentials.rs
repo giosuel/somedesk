@@ -28,7 +28,7 @@ pub struct DeviceCredentials {
 }
 
 /// A device's sign-in to an account: the account's certificate for the device key.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AccountCredentials {
     pub username: String,
     pub identity_pk: [u8; 32],
@@ -45,6 +45,16 @@ impl std::fmt::Debug for DeviceCredentials {
             .field("server", &self.server)
             .field("device_id", &self.device_id)
             .field("account", &self.account.as_ref().map(|a| &a.username))
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for AccountCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountCredentials")
+            .field("username", &self.username)
+            .field("identity_pk", &hex::encode(self.identity_pk))
+            .field("vault_key", &self.vault_key.map(|_| "<redacted>"))
             .finish_non_exhaustive()
     }
 }
@@ -165,6 +175,10 @@ mod tests {
         assert_eq!(creds.username(), Some("alice"));
         creds.save(&path).unwrap();
         let again = DeviceCredentials::load(&path).unwrap().unwrap();
+        let mut account = again.account.clone().unwrap();
+        account.vault_key = Some([0xab; 32]);
+        let printed = format!("{account:?} {again:?}");
+        assert!(printed.contains("alice") && !printed.contains("ab, ") && !printed.contains("abab"), "{printed}");
         assert_eq!(again.account.unwrap().cert, cert);
         std::fs::remove_file(path).unwrap();
     }
