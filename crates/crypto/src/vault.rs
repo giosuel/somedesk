@@ -4,6 +4,9 @@
 //! identity key, which only the account's devices ever hold in the clear, so the server stores
 //! the vault without being able to read it. A device keeps the vault key once it is signed in,
 //! so it can sync without asking for the password again.
+//!
+//! The seal binds the account but not the time: the server could hand back an older blob. The
+//! contents carry a counter for that, which devices check (`somedesk_client::addressbook`).
 
 use crate::keys::IdentityKey;
 use crate::CryptoError;
