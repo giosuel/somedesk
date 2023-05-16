@@ -1,10 +1,22 @@
 //! H.264 video encoding and decoding (OpenH264, software).
+//!
+//! The decoder reads video from the peer, so what it accepts is limited: access units of at most
+//! [`MAX_ACCESS_UNIT`] bytes, and pictures of at most [`MAX_DIMENSION`] pixels a side and
+//! [`MAX_PIXELS`] in all, before any RGB buffer is made for them. OpenH264 itself still parses
+//! the bitstream in this process.
 
 use anyhow::{ensure, Context};
 use openh264::decoder::Decoder;
 use openh264::encoder::{BitRate, Encoder, EncoderConfig, FrameRate, FrameType, RateControlMode, UsageType};
 use openh264::formats::{BgraSliceU8, YUVBuffer, YUVSource};
 use openh264::OpenH264API;
+
+/// The largest access unit the decoder takes.
+pub const MAX_ACCESS_UNIT: usize = 16 * 1024 * 1024;
+/// The largest picture side the decoder takes (three 4K screens side by side fit).
+pub const MAX_DIMENSION: usize = 16384;
+/// The most pixels a decoded picture may have (about 120 MB as RGB).
+pub const MAX_PIXELS: usize = 40_000_000;
 
 /// A decoded frame, tightly packed RGB8.
 #[derive(Clone)]
@@ -106,14 +118,25 @@ impl H264Decoder {
 
     /// Decodes one access unit. Returns `None` if the decoder needs more data.
     pub fn decode(&mut self, data: &[u8]) -> anyhow::Result<Option<RgbFrame>> {
+        ensure!(data.len() <= MAX_ACCESS_UNIT, "access unit of {} bytes is too large", data.len());
         let Some(yuv) = self.dec.decode(data).context("H.264 decode")? else {
             return Ok(None);
         };
         let (w, h) = yuv.dimensions();
+        check_dimensions(w, h)?;
         let mut rgb = vec![0u8; w * h * 3];
         yuv.write_rgb8(&mut rgb);
         Ok(Some(RgbFrame { width: w as u32, height: h as u32, data: rgb }))
     }
+}
+
+/// Whether a decoded picture of `w`×`h` is one we make an RGB frame of.
+fn check_dimensions(w: usize, h: usize) -> anyhow::Result<()> {
+    ensure!(
+        (1..=MAX_DIMENSION).contains(&w) && (1..=MAX_DIMENSION).contains(&h) && w * h <= MAX_PIXELS,
+        "decoded picture of {w}x{h} is out of bounds"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -209,6 +232,62 @@ mod tests {
         assert_eq!((out.width, out.height), (100, 74));
         let mid = &out.data[(37 * 100 + 50) * 3..][..3];
         assert!(mid[0] > 200 && mid[2] < 60, "expected red-ish pixel, got {mid:?}");
+    }
+
+    #[test]
+    fn picture_size_limits() {
+        assert!(check_dimensions(3840, 2160).is_ok());
+        assert!(check_dimensions(11520, 2160).is_ok(), "three 4K screens");
+        assert!(check_dimensions(MAX_DIMENSION + 1, 16).is_err());
+        assert!(check_dimensions(16, MAX_DIMENSION + 1).is_err());
+        assert!(check_dimensions(MAX_DIMENSION, MAX_DIMENSION).is_err(), "too many pixels");
+        assert!(check_dimensions(0, 16).is_err());
+        assert!(H264Decoder::new().unwrap().decode(&vec![0; MAX_ACCESS_UNIT + 1]).is_err());
+    }
+
+    #[test]
+    fn malformed_bitstreams_are_errors_not_crashes() {
+        let mut enc = H264Encoder::new(128, 96, &EncoderSettings::default()).unwrap();
+        let key = enc.encode_bgra(&test_frame(128, 96, 0), 512, true).unwrap().unwrap().data;
+        let next = enc.encode_bgra(&test_frame(128, 96, 1), 512, false).unwrap().unwrap().data;
+        // A small deterministic generator, so failures can be reproduced.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut inputs: Vec<Vec<u8>> = vec![
+            vec![],
+            vec![0, 0, 0, 1],
+            vec![0, 0, 1, 0x67, 0xff, 0xff, 0xff, 0xff],
+            (0..4096).map(|_| rand() as u8).collect(),
+            key[..key.len() / 2].to_vec(),
+            next.clone(),
+        ];
+        for _ in 0..200 {
+            let mut damaged = if rand() % 2 == 0 { key.clone() } else { next.clone() };
+            for _ in 0..1 + rand() % 8 {
+                let i = rand() as usize % damaged.len();
+                damaged[i] = rand() as u8;
+            }
+            if rand() % 4 == 0 {
+                damaged.truncate(rand() as usize % damaged.len());
+            }
+            inputs.push(damaged);
+        }
+        let mut dec = H264Decoder::new().unwrap();
+        for input in &inputs {
+            if let Ok(Some(frame)) = dec.decode(input) {
+                assert_eq!(frame.data.len(), frame.width as usize * frame.height as usize * 3);
+            }
+        }
+        // And it still decodes good video afterwards, from a keyframe.
+        let mut fresh = H264Encoder::new(128, 96, &EncoderSettings::default()).unwrap();
+        let good = fresh.encode_bgra(&test_frame(128, 96, 2), 512, true).unwrap().unwrap();
+        let frame = (0..3).find_map(|_| dec.decode(&good.data).ok().flatten()).expect("decodes again");
+        assert_eq!((frame.width, frame.height), (128, 96));
     }
 
     #[test]
