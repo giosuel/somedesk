@@ -152,10 +152,15 @@ fn run(dir: PathBuf, creds_path: PathBuf) -> anyhow::Result<()> {
     });
     {
         let agent = agent.clone();
-        banner.on_disconnect(move || {
-            if let Some(stop) = agent.stop.lock().unwrap().take() {
-                let _ = stop.send(true);
-            }
+        banner.on_disconnect(move || agent.end_session());
+    }
+    {
+        // Closing the banner (Alt+F4, say) ends the session: it can't go on unseen. The banner
+        // goes away when the session has ended.
+        let agent = agent.clone();
+        banner.window().on_close_requested(move || {
+            agent.end_session();
+            slint::CloseRequestResponse::KeepWindowShown
         });
     }
     let a = agent.clone();
@@ -165,6 +170,27 @@ fn run(dir: PathBuf, creds_path: PathBuf) -> anyhow::Result<()> {
 }
 
 impl Agent {
+    fn end_session(&self) {
+        if let Some(stop) = self.stop.lock().unwrap().take() {
+            let _ = stop.send(true);
+        }
+    }
+
+    /// Shows the banner for a session by `who`; false if it couldn't be shown.
+    async fn show_banner(&self, who: String, org: String) -> bool {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let queued = self.banner.upgrade_in_event_loop(move |b| {
+            b.set_who(who.into());
+            b.set_org(org.into());
+            let shown = b.show().inspect_err(|e| tracing::error!("cannot show the banner: {e}")).is_ok();
+            if shown {
+                place_at_top(&b);
+            }
+            let _ = tx.send(shown && b.window().is_visible());
+        });
+        queued.is_ok() && matches!(tokio::time::timeout(Duration::from_secs(10), rx).await, Ok(Ok(true)))
+    }
+
     async fn online(self: Arc<Self>, creds_path: PathBuf) {
         let mut backoff = Duration::from_secs(1);
         loop {
@@ -266,14 +292,13 @@ impl Agent {
         };
         let (stop_tx, stop_rx) = watch::channel(false);
         *self.stop.lock().unwrap() = Some(stop_tx);
-        // The banner always shows while someone is connected.
-        let (w, o) = (who.clone(), org_name.clone());
-        let _ = self.banner.upgrade_in_event_loop(move |b| {
-            b.set_who(w.into());
-            b.set_org(o.into());
-            let _ = b.show();
-            place_at_top(&b);
-        });
+        // The banner always shows while someone is connected: no banner, no session.
+        if !self.show_banner(who.clone(), org_name.clone()).await {
+            *self.stop.lock().unwrap() = None;
+            host::reject(ch, "This computer cannot show that someone is connected, so it doesn't let anyone in.").await;
+            self.busy.store(false, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
         let clipboard = somedesk_platform::default_clipboard().ok();
         let extras = somedesk_client::SessionExtras { clipboard, files: None };
         if !screen.can_control {
