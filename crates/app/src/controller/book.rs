@@ -93,6 +93,7 @@ impl Controller {
             if let Err(e) = book.save() {
                 tracing::error!("cannot save the address book: {e}");
             }
+            st.book_generation += 1;
         }
         self.publish_book();
         self.sync_book();
@@ -104,14 +105,27 @@ impl Controller {
         let Some(book_path) = Some(self.book_path()) else { return };
         let this = self.clone();
         self.0.rt.spawn(async move {
+            // One at a time, each starting from what the one before left.
+            let _turn = this.0.book_sync.lock().await;
             // Sync a copy, so the book isn't locked across the network round trips.
+            let generation = this.0.state.lock().unwrap().book_generation;
             let mut book = match AddressBook::load(&book_path) {
                 Ok(b) => b,
                 Err(e) => return tracing::warn!("cannot read the address book: {e}"),
             };
             match book.sync(&conn, &key, &username).await {
                 Ok(()) => {
-                    this.0.state.lock().unwrap().book = Some(book);
+                    let mut st = this.0.state.lock().unwrap();
+                    if st.book_generation == generation {
+                        st.book = Some(book);
+                    } else if let Some(current) = st.book.as_ref() {
+                        // Changed here meanwhile: keep that (the sync saved over it on disk).
+                        // The sync that change started merges both.
+                        if let Err(e) = current.save() {
+                            tracing::error!("cannot save the address book: {e}");
+                        }
+                    }
+                    drop(st);
                     this.publish_book();
                 }
                 Err(e) => tracing::warn!("cannot sync the address book: {e}"),

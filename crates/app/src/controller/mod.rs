@@ -136,22 +136,25 @@ struct State {
     creds: Option<DeviceCredentials>,
     conn: Option<Arc<ServerConn>>,
     online_task: Option<JoinHandle<()>>,
-    viewer_task: Option<JoinHandle<()>>,
+    /// Cancels the viewer session being set up (its task still cleans up after itself).
+    viewer_cancel: Option<oneshot::Sender<()>>,
     viewer_input: Option<mpsc::UnboundedSender<SessionMsg>>,
     scroll_acc: (f32, f32),
     /// The phone's hidden keyboard input as of the last edit.
     soft_text: String,
     host_stop: Option<watch::Sender<bool>>,
-    /// Whether the person at this computer accepted.
-    incoming_answer: Option<oneshot::Sender<bool>>,
+    /// The incoming-connection prompt on screen, waiting for the person at this computer.
+    incoming: Option<hosting::Prompt>,
+    /// Numbers the prompts, so an answer only counts for the one it was given to.
+    incoming_seq: u64,
+    /// Callers declined recently, and when: they are turned away for a while without asking.
+    declined: std::collections::HashMap<u64, Instant>,
     /// Remembered device and account keys; loaded at start.
     trust: Option<TrustStore>,
     /// The address book; loaded at start.
     book: Option<AddressBook>,
     /// Whether the system has a keychain for passwords "on this device".
     keychain: bool,
-    /// Unattended access to this computer (its password and authenticator).
-    unattended: Option<Unattended>,
     /// The account has two-factor authentication.
     account_totp: bool,
     /// The account's login on the current server connection, once the user confirmed their
@@ -185,8 +188,8 @@ struct State {
     transfers: Vec<TransferRow>,
     /// Files the peer offered that we have not answered yet, oldest first.
     file_offers: std::collections::VecDeque<(u32, String, u64)>,
-    /// The password and where to keep it, for a connection made with one, until it succeeds.
-    password_to_save: Option<(u64, String, crate::SaveIn)>,
+    /// Counts changes to the address book, so a sync can tell whether it ran over one.
+    book_generation: u64,
 }
 
 enum TwoFactorSetup {
@@ -211,6 +214,14 @@ struct Inner {
     dir: PathBuf,
     default_server: Option<String>,
     state: Mutex<State>,
+    /// Unattended access to this computer (its password and authenticator). An async lock: an
+    /// exchange with a viewer holds it across network round trips, and turning it off or
+    /// setting it up waits its turn instead of failing.
+    unattended: tokio::sync::Mutex<Option<Unattended>>,
+    /// Turning unattended access off is waiting for an exchange: that exchange doesn't let in.
+    unattended_off: AtomicBool,
+    /// One address-book sync at a time.
+    book_sync: tokio::sync::Mutex<()>,
     /// A session (as host or viewer) is in progress or being set up.
     busy: AtomicBool,
     frame: FrameSlot,
@@ -316,6 +327,9 @@ impl Controller {
             dir,
             default_server,
             state: Mutex::default(),
+            unattended: tokio::sync::Mutex::new(None),
+            unattended_off: AtomicBool::new(false),
+            book_sync: tokio::sync::Mutex::new(()),
             busy: AtomicBool::new(false),
             frame: FrameSlot::default(),
             frame_w: AtomicU32::new(0),
@@ -419,16 +433,23 @@ impl Controller {
             let _ = std::fs::rename(&trust_path, aside);
             TrustStore::empty(&trust_path)
         });
-        let unattended = Unattended::load(&self.0.dir.join("unattended.json"))
-            .map_err(|e| tracing::error!("cannot read the unattended-access setup: {e}"))
-            .ok();
+        let unattended_path = self.0.dir.join("unattended.json");
+        let unattended = Unattended::load(&unattended_path).or_else(|e| {
+            // Unreadable: it is off (fail closed), and can be set up again. Kept for inspection.
+            let aside = unattended_path.with_extension("json.broken");
+            tracing::error!("cannot read the unattended-access setup ({e}); moving it to {}", aside.display());
+            let _ = std::fs::rename(&unattended_path, aside);
+            Unattended::load(&unattended_path)
+        });
+        let unattended = unattended.map_err(|e| tracing::error!("cannot set up unattended access: {e}")).ok();
         let unattended_on = unattended.as_ref().is_some_and(|u| u.enabled());
         {
             let mut st = self.0.state.lock().unwrap();
             st.settings = settings;
             st.trust = Some(trust);
-            st.unattended = unattended;
         }
+        // Nothing else has it yet: no viewer can arrive before the app is online.
+        *self.0.unattended.try_lock().expect("unused before start") = unattended;
         self.load_book();
         self.publish_recents();
         self.ui(move |ui| {
@@ -506,11 +527,14 @@ impl Controller {
         });
         let c = self.clone();
         ui.on_start_at_login_changed(move |v| {
-            c.0.state.lock().unwrap().settings.start_at_login = v;
-            c.save_settings();
+            // The setting follows what the system now does, also when that couldn't change.
             if let Err(e) = crate::background::set_autostart(v) {
                 c.toast(format!("Could not change this: {e}"), true);
+                c.ui(move |ui| ui.set_start_at_login(!v));
+                return;
             }
+            c.0.state.lock().unwrap().settings.start_at_login = v;
+            c.save_settings();
         });
         let c = self.clone();
         ui.on_copy_id(move || {
