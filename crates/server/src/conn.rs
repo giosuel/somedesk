@@ -7,7 +7,7 @@ use somedesk_crypto::opaque::{self, ServerLoginState};
 use somedesk_crypto::recovery;
 use somedesk_crypto::totp::{self, TotpSecret};
 use somedesk_proto::control::*;
-use somedesk_proto::frame::{read_msg_limited, write_msg};
+use somedesk_proto::frame::{read_msg_limited, write_msg, FrameError};
 use somedesk_proto::org::{policy_hash, OrgDeviceCert, OrgPolicy, PolicyBundle, SignedPolicy};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
@@ -128,8 +128,20 @@ pub async fn handle(shared: Arc<Shared>, incoming: quinn::Incoming, _slots: (Slo
     let (tx, mut rx) = mpsc::channel::<ServerFrame>(QUEUE_LEN);
     let writer = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
-            if write_msg(&mut send, &frame).await.is_err() {
-                break;
+            match write_msg(&mut send, &frame).await {
+                Ok(()) => {}
+                // Nothing of it was sent, so the stream is still fine: the request gets an error
+                // instead of the connection ending.
+                Err(FrameError::TooLarge(len)) => {
+                    tracing::warn!(len, "a reply is too large to send");
+                    if let ServerFrame::Response { id, .. } = frame {
+                        let result = Err(err(ErrorCode::Internal, "the reply is too large"));
+                        if write_msg(&mut send, &ServerFrame::Response { id, result }).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break,
             }
         }
     });
@@ -686,11 +698,15 @@ impl Ctx {
             }
 
             Request::LookupDevice { device_id } => {
-                self.require_device()?;
+                let my_device = self.require_device()?;
                 self.limit_ip("lookup_device", LOOKUP_LIMIT)?;
+                self.limit_key("lookup_device", &my_device.to_string(), LOOKUP_LIMIT)?;
+                // Others' devices look like IDs nobody has: trying IDs tells nobody whose
+                // device is behind one, or whether it's online. (A session request introduces
+                // the two devices to each other.)
                 match db::get_device(&db, device_id).await.map_err(internal)? {
-                    Some(d) => Ok(Response::Device(self.device_info(&d))),
-                    None => Err(err(ErrorCode::NotFound, "no device with this id")),
+                    Some(d) if self.may_see_device(my_device, &d).await? => Ok(Response::Device(self.device_info(&d))),
+                    _ => Err(err(ErrorCode::NotFound, "no device with this id")),
                 }
             }
 
@@ -969,7 +985,11 @@ impl Ctx {
                 if sealed_key.len() > 256 {
                     return Err(err(ErrorCode::BadRequest, "invalid key"));
                 }
-                db::put_org_key(&db, org_id, target.id, &sealed_key).await.map_err(internal)?;
+                // An account that has the key keeps its copy (sharing again changes nothing).
+                if db::put_org_key(&db, org_id, target.id, &sealed_key).await.map_err(internal)? {
+                    let detail = format!("{org_id} {username}");
+                    db::audit(&db, Some(user.id), None, "org_key_shared", Some(&detail)).await;
+                }
                 Ok(Response::Ok)
             }
 
@@ -1068,6 +1088,23 @@ impl Ctx {
             }
         }
         Ok(())
+    }
+
+    /// Whether this connection may look `d` up: the device itself, a device of the same account,
+    /// or one its organisation enrolled (for its members and its other devices).
+    async fn may_see_device(&self, my_device: u64, d: &db::DeviceRow) -> Result<bool, ErrorInfo> {
+        if d.id == my_device {
+            return Ok(true);
+        }
+        let account = self.account().await.ok();
+        if account.is_some() && d.account.as_ref().map(|a| a.user_id) == account {
+            return Ok(true);
+        }
+        let Some((org_id, _)) = &d.org else { return Ok(false) };
+        match db::get_org(&self.shared.db, *org_id).await.map_err(internal)? {
+            Some(org) => self.may_read_org(&org).await,
+            None => Ok(false),
+        }
     }
 
     /// Members read their organisation's policy, and so do its own devices.

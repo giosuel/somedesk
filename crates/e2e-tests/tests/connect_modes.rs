@@ -379,6 +379,13 @@ async fn a_departing_admin_takes_no_working_key_along() {
     assert_eq!((shared_by.username.as_str(), shared_by.identity_pk), ("jane", login.identity.public()));
     let old_key = tom_admin.key.to_bytes();
 
+    // As an admin he can share the key, but not replace jane's copy with garbage.
+    let jane_copy = conn.list_orgs().await.unwrap().remove(0).sealed_key;
+    tom_conn.share_org_key(org_id, "jane", vec![7; 48]).await.unwrap();
+    let info = conn.list_orgs().await.unwrap().remove(0);
+    assert_eq!(info.sealed_key, jane_copy, "kept");
+    assert!(Admin::open(&info, &login, None).is_ok());
+
     // Jane removes him: the organisation gets a new key, which he doesn't get.
     admin.remove_member(&conn, &login, "tom").await.unwrap();
     assert_ne!(admin.key.public(), enrollment.org_pk);

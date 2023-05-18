@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const WINDOW: Duration = Duration::from_secs(60);
+/// Most keys a limit keeps track of at once, so many addresses can't grow it without end. When
+/// it is full, expired keys are dropped; if none are, new keys are refused until some expire.
+const MAX_KEYS: usize = 200_000;
 
 /// The address a limit counts for. IPv6 users get a whole /64 (often more), so it counts as one.
 pub fn ip_key(ip: IpAddr) -> String {
@@ -26,9 +29,15 @@ pub fn ip_key(ip: IpAddr) -> String {
     }
 }
 
-#[derive(Default)]
 pub struct RateLimiter {
     buckets: Mutex<HashMap<String, (Instant, u32)>>,
+    max_keys: usize,
+}
+
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self { buckets: Mutex::default(), max_keys: MAX_KEYS }
+    }
 }
 
 impl RateLimiter {
@@ -36,6 +45,12 @@ impl RateLimiter {
     pub fn allow(&self, key: &str, limit: u32) -> bool {
         let now = Instant::now();
         let mut map = self.buckets.lock().unwrap();
+        if map.len() >= self.max_keys && !map.contains_key(key) {
+            map.retain(|_, (start, _)| now.duration_since(*start) < WINDOW);
+            if map.len() >= self.max_keys {
+                return false;
+            }
+        }
         let entry = map.entry(key.to_owned()).or_insert((now, 0));
         if now.duration_since(entry.0) >= WINDOW {
             *entry = (now, 0);
@@ -64,9 +79,15 @@ struct Failures {
 /// Waits that grow with every wrong attempt (a password, a code): a few are free, then 30 s,
 /// doubling up to an hour. Only failures count, so a key can't be locked by attempts that
 /// succeed, and nothing is spent by merely starting one.
-#[derive(Default)]
 pub struct Backoff {
     keys: Mutex<HashMap<String, Failures>>,
+    max_keys: usize,
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self { keys: Mutex::default(), max_keys: MAX_KEYS }
+    }
 }
 
 impl Backoff {
@@ -81,6 +102,14 @@ impl Backoff {
     pub fn fail(&self, key: &str, free: u32) {
         let now = Instant::now();
         let mut map = self.keys.lock().unwrap();
+        if map.len() >= self.max_keys && !map.contains_key(key) {
+            // Keys that aren't waiting only lose their few free attempts; waiting ones stay.
+            map.retain(|_, f| f.until.is_some_and(|u| u > now));
+            if map.len() >= self.max_keys {
+                tracing::warn!("too many keys with wrong attempts; not counting a new one");
+                return;
+            }
+        }
         let f = map.entry(key.to_owned()).or_insert(Failures { count: 0, last: now, until: None });
         if now.duration_since(f.last) > FORGET_AFTER {
             f.count = 0;
@@ -158,6 +187,28 @@ mod tests {
         }
         assert!(!rl.allow("a", 3));
         assert!(rl.allow("b", 3));
+    }
+
+    #[test]
+    fn the_number_of_keys_is_bounded() {
+        let rl = RateLimiter { max_keys: 3, ..RateLimiter::default() };
+        for k in ["a", "b", "c"] {
+            assert!(rl.allow(k, 10));
+        }
+        assert!(!rl.allow("d", 10), "full of keys still in their window");
+        assert!(rl.allow("a", 10), "known keys go on counting");
+        assert_eq!(rl.buckets.lock().unwrap().len(), 3);
+        rl.buckets.lock().unwrap().get_mut("b").unwrap().0 -= WINDOW;
+        assert!(rl.allow("d", 10), "an expired key makes room");
+
+        let b = Backoff { max_keys: 2, ..Backoff::default() };
+        for _ in 0..6 {
+            b.fail("waiting", 5);
+        }
+        b.fail("typo", 5);
+        b.fail("new", 5);
+        let keys = b.keys.lock().unwrap();
+        assert!(keys.contains_key("waiting") && keys.contains_key("new") && !keys.contains_key("typo"));
     }
 
     #[test]
