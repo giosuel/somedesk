@@ -9,7 +9,7 @@ RUN cargo build --release --locked -p somedesk-server \
 FROM docker.io/library/debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --home-dir /data --create-home somedesk
+    && useradd --system --uid 999 --user-group --home-dir /data --create-home somedesk
 COPY --from=build /src/target/release/somedesk-server /usr/local/bin/somedesk-server
 USER somedesk
 # The TLS certificate (whose fingerprint clients pin) lives here: keep it on a volume.
