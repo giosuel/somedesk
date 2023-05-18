@@ -40,8 +40,7 @@ cargo ndk -P "$MIN_SDK" "${targets[@]}" -o "$OUT/lib" build --release --locked -
 "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip --strip-unneeded "$OUT"/lib/*/libsomedesk.so
 
 VERSION=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "somedesk-android"))')
-# 1.2.3 → 10203: increases with every release.
-VERSION_CODE=$(echo "$VERSION" | awk -F'[.-]' '{print $1 * 10000 + $2 * 100 + $3}')
+VERSION_CODE=$(packaging/android/version-code.sh "$VERSION")
 sed -e "s/@VERSION@/$VERSION/" -e "s/@VERSION_CODE@/$VERSION_CODE/" packaging/android/AndroidManifest.xml \
     >"$OUT/AndroidManifest.xml"
 
