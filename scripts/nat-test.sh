@@ -22,7 +22,8 @@ WORK="$(mktemp -d)"
 # --workspace resolves dependency features like `cargo test --workspace` (scripts/test.sh), so
 # everything the tests already compiled is reused instead of being built a second time.
 cargo build -q --workspace --bins --examples
-PEER="$PWD/target/debug/examples/nat_peer"
+TARGET="$(realpath "${CARGO_TARGET_DIR:-target}")"
+PEER="$TARGET/debug/examples/nat_peer"
 
 cleanup() {
     [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
@@ -95,7 +96,7 @@ run_case() { # $1: name, $2: MASQUERADE options, $3: expected route
     echo "== $1"
     setup_network "$2"
     psql "$ADMIN_URL" -qc "DROP DATABASE IF EXISTS somedesk_nat WITH (FORCE)" -c "CREATE DATABASE somedesk_nat" >/dev/null
-    target/debug/somedesk-server --listen "$SERVER" --database-url "$DB_URL" --data-dir "$WORK/server" \
+    "$TARGET/debug/somedesk-server" --listen "$SERVER" --database-url "$DB_URL" --data-dir "$WORK/server" \
         >"$WORK/server.log" 2>&1 &
     SERVER_PID=$!
     sleep 1
