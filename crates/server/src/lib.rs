@@ -194,6 +194,47 @@ pub async fn create_invite(database_url: &str, uses: u32, expires_in_days: Optio
     db::create_invite(&db, uses, expires_in_days).await
 }
 
+/// Checks that the server listening on `addr` answers, with the certificate in `data_dir`
+/// (`somedesk-server check`, for health checks). An unspecified address (`0.0.0.0`) means this
+/// machine.
+pub async fn check(addr: SocketAddr, data_dir: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use somedesk_proto::control::{ClientFrame, Request, Response};
+    use somedesk_proto::frame::{read_msg, write_msg};
+    let mut addr = addr;
+    if addr.ip().is_unspecified() {
+        addr.set_ip(if addr.is_ipv6() {
+            std::net::Ipv6Addr::LOCALHOST.into()
+        } else {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        });
+    }
+    let cert_path = data_dir.join("server.crt.der");
+    let cert = std::fs::read(&cert_path).with_context(|| format!("reading {}", cert_path.display()))?;
+    let pin = <sha2::Sha256 as sha2::Digest>::digest(&cert).into();
+    let bind: SocketAddr = if addr.is_ipv6() { "[::]:0".parse()? } else { "0.0.0.0:0".parse()? };
+    let mut endpoint = quinn::Endpoint::client(bind)?;
+    endpoint.set_default_client_config(tls::quinn_client_config(pin)?);
+    let answer = async {
+        let conn = endpoint.connect(addr, "somedesk")?.await?;
+        let (mut send, mut recv) = conn.open_bi().await?;
+        let hello = ClientFrame { id: 1, req: Request::Hello { version: somedesk_proto::PROTOCOL_VERSION } };
+        write_msg(&mut send, &hello).await?;
+        let reply = read_msg::<_, ServerFrame>(&mut recv).await?;
+        conn.close(0u32.into(), b"");
+        match reply {
+            Some(ServerFrame::Response { id: 1, result: Ok(Response::Hello { .. }) }) => Ok(()),
+            other => anyhow::bail!("unexpected answer: {other:?}"),
+        }
+    };
+    let result = tokio::time::timeout(Duration::from_secs(5), answer)
+        .await
+        .map_err(|_| anyhow::anyhow!("no answer from {addr}"))
+        .and_then(|r| r.with_context(|| format!("checking the server on {addr}")));
+    endpoint.wait_idle().await;
+    result
+}
+
 pub async fn start(config: ServerConfig) -> anyhow::Result<RunningServer> {
     let db = PgPoolOptions::new().max_connections(20).connect(&config.database_url).await?;
     db::migrate(&db).await?;

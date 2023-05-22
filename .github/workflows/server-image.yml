@@ -46,13 +46,13 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Image name and version
         run: |
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/somedesk-server" >> "$GITHUB_ENV"
           echo "VERSION=${{ inputs.version || format('main-{0}', github.sha) }}" >> "$GITHUB_ENV"
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: env.PUSH == 'true'
         with:
           registry: ghcr.io
@@ -60,7 +60,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       # Pushed by digest only, without a tag: the merge job tags the multi-arch image.
       - id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         env:
           # The build record isn't needed, and it's uploaded in a form other jobs can't download.
           DOCKER_BUILD_RECORD_UPLOAD: false
@@ -74,10 +74,18 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=AGPL-3.0-or-later
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
+      # The image that was pushed, by its digest; a dry run's, built again into the local store.
       - name: Smoke test
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          docker buildx build -f packaging/server/Dockerfile --platform ${{ matrix.platform }} --load -t smoke .
-          docker run --rm smoke --version
+          image="$IMAGE@$DIGEST"
+          if [ "$PUSH" != true ]; then
+            docker buildx build -f packaging/server/Dockerfile --platform ${{ matrix.platform }} --load -t smoke .
+            image=smoke
+          fi
+          docker run --rm "$image" --version
+          docker run --rm "$image" check --help >/dev/null
       - name: Save the digest
         if: env.PUSH == 'true'
         run: |
@@ -85,7 +93,7 @@ jobs:
           touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: env.PUSH == 'true'
         with:
           name: server-image-digest-${{ strategy.job-index }}
@@ -100,13 +108,13 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/digests
           pattern: server-image-digest-*
           merge-multiple: true
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

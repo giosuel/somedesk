@@ -17,11 +17,12 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
@@ -38,12 +39,13 @@ jobs:
   android:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: aarch64-linux-android
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -71,9 +73,11 @@ jobs:
     env:
       SOMEDESK_TEST_DATABASE_URL: postgres://postgres:postgres@localhost/postgres
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
@@ -93,9 +97,11 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
@@ -103,7 +109,7 @@ jobs:
       - name: Tests (without database or display)
         run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
       - run: cargo build --release -p somedesk-app
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: somedesk-windows
           path: target/release/somedesk.exe
@@ -111,9 +117,11 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
@@ -121,7 +129,7 @@ jobs:
       - name: Tests (without database or display)
         run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
       - run: packaging/macos/make-app.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: somedesk-macos
           path: target/dist/SomeDesk-*-macos.zip
@@ -131,9 +139,11 @@ jobs:
   packages:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-release
           # A failed run still saves what it compiled, so the next run doesn't start cold.
@@ -144,11 +154,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config clang libfontconfig1-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev
-      - run: cargo install cargo-deb --locked
+      - run: cargo install cargo-deb@3.8.0 --locked
       - run: cargo build --release --locked -p somedesk-server -p somedesk-app
       - run: cargo deb --no-build -p somedesk-server && cargo deb --no-build -p somedesk-app
       - run: docker build -f packaging/server/Dockerfile -t somedesk-server .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: somedesk-debs
           path: target/debian/*.deb

@@ -10,11 +10,22 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 export SOMEDESK_TEST_DATABASE_URL="${SOMEDESK_TEST_DATABASE_URL:-postgres://sysadmin:devpass@localhost/postgres}"
 
-DISPLAY_NUM=":$(( 90 + RANDOM % 100 ))"
-Xvfb "$DISPLAY_NUM" -screen 0 1024x768x24 -nolisten tcp -noreset >/dev/null 2>&1 &
+# Xvfb picks a free display number itself and writes it out once it's ready, so the tests never
+# end up on someone else's display.
+DISPLAY_FILE="$(mktemp)"
+Xvfb -displayfd 3 -screen 0 1024x768x24 -nolisten tcp -noreset 3>"$DISPLAY_FILE" >/dev/null 2>&1 &
 XVFB_PID=$!
-trap 'kill $XVFB_PID 2>/dev/null || true' EXIT
-for _ in $(seq 50); do xdpyinfo -display "$DISPLAY_NUM" >/dev/null 2>&1 && break; sleep 0.1; done
+trap 'kill $XVFB_PID 2>/dev/null || true; rm -f "$DISPLAY_FILE"' EXIT
+for _ in $(seq 100); do
+    grep -q '^[0-9][0-9]*$' "$DISPLAY_FILE" && break
+    kill -0 "$XVFB_PID" 2>/dev/null || break
+    sleep 0.1
+done
+if ! grep -q '^[0-9][0-9]*$' "$DISPLAY_FILE" || ! kill -0 "$XVFB_PID" 2>/dev/null; then
+    echo "Xvfb did not start" >&2
+    exit 1
+fi
+DISPLAY_NUM=":$(head -n1 "$DISPLAY_FILE")"
 export SOMEDESK_TEST_DISPLAY="$DISPLAY_NUM"
 
 # X11 tests share one display, so run test binaries single-threaded where they touch it.
@@ -24,7 +35,7 @@ cargo test --workspace "$@" -- --test-threads=1
 if command -v gnome-shell >/dev/null && [ -x /usr/libexec/xdg-desktop-portal-gnome ]; then
     export WL_DIR="/tmp/somedesk-wayland-test-$$"
     # The document portal mounts run/doc and may still hold it while the session stops.
-    trap 'kill $XVFB_PID 2>/dev/null || true; scripts/wayland-env.sh stop >/dev/null 2>&1 || true
+    trap 'kill $XVFB_PID 2>/dev/null || true; rm -f "$DISPLAY_FILE"; scripts/wayland-env.sh stop >/dev/null 2>&1 || true
           fusermount3 -u "$WL_DIR/run/doc" 2>/dev/null || fusermount -u "$WL_DIR/run/doc" 2>/dev/null || true
           rm -rf "$WL_DIR" 2>/dev/null || true' EXIT
     scripts/wayland-env.sh start >/dev/null

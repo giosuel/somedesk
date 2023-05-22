@@ -15,6 +15,8 @@ pub struct TestServer {
     pub addr: String,
     pub fingerprint: [u8; 32],
     pub db_url: String,
+    /// Where the server keeps its certificate.
+    pub data_dir: std::path::PathBuf,
     /// Every byte forwarded by the relay.
     pub relay_bytes: Arc<Mutex<Vec<u8>>>,
     admin_url: String,
@@ -57,12 +59,13 @@ impl TestServer {
         admin.close().await.unwrap();
         let db_url = format!("{}/{}", admin_url.rsplit_once('/').unwrap().0, db_name);
 
+        let data_dir = std::env::temp_dir().join(&db_name);
         let relay_bytes = Arc::new(Mutex::new(Vec::new()));
         let tap_bytes = relay_bytes.clone();
         let server = somedesk_server::start(ServerConfig {
             listen: "127.0.0.1:0".parse().unwrap(),
             database_url: db_url.clone(),
-            data_dir: std::env::temp_dir().join(&db_name),
+            data_dir: data_dir.clone(),
             open,
             registration,
             limits,
@@ -74,6 +77,7 @@ impl TestServer {
             addr: server.local_addr.to_string(),
             fingerprint: server.cert_fingerprint,
             db_url,
+            data_dir,
             relay_bytes,
             admin_url,
             db_name,

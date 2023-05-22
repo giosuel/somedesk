@@ -64,6 +64,16 @@ enum Command {
         #[arg(long)]
         expires_in: Option<u32>,
     },
+    /// Checks that the server on this machine answers (exits non-zero if not): a health check
+    /// for containers and monitoring.
+    Check {
+        /// The server's address; 0.0.0.0 means this machine.
+        #[arg(long, env = "SOMEDESK_LISTEN", default_value = "0.0.0.0:21116")]
+        listen: SocketAddr,
+        /// The server's data directory, for its certificate.
+        #[arg(long, env = "SOMEDESK_DATA_DIR", default_value = "./data")]
+        data_dir: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -74,10 +84,14 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args = Args::parse();
-    if let Some(Command::Invite { database_url, uses, expires_in }) = args.command {
-        let code = somedesk_server::create_invite(&database_url, uses.max(1), expires_in).await?;
-        println!("{code}");
-        return Ok(());
+    match args.command {
+        Some(Command::Invite { database_url, uses, expires_in }) => {
+            let code = somedesk_server::create_invite(&database_url, uses.max(1), expires_in).await?;
+            println!("{code}");
+            return Ok(());
+        }
+        Some(Command::Check { listen, data_dir }) => return somedesk_server::check(listen, &data_dir).await,
+        None => {}
     }
     let Some(database_url) = args.database_url else {
         anyhow::bail!("set the PostgreSQL connection string with --database-url or DATABASE_URL");

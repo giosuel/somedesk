@@ -47,12 +47,15 @@ async fn devices_get_an_id_without_an_account() {
     assert!((100_000_000..=999_999_999).contains(&id));
     assert_eq!(laptop.creds.account.as_ref().map(|a| &a.username), None);
 
-    // Anyone can look it up by its ID, and it has no account.
-    let other = ts.anonymous("phone").await;
-    let info = other.conn.lookup_device(id).await.unwrap();
+    // It can look itself up, and has no account.
+    let info = laptop.conn.lookup_device(id).await.unwrap();
     assert!(info.online);
     assert_eq!(info.identity.name, "laptop");
     assert_eq!(info.identity.account, None);
+    // To others, it looks like an ID nobody has (so trying IDs finds nothing).
+    let other = ts.anonymous("phone").await;
+    assert_eq!(code(other.conn.lookup_device(id).await), ErrorCode::NotFound);
+    assert_eq!(code(other.conn.lookup_device(123_456_789).await), ErrorCode::NotFound);
     // Only accounts have a device list.
     assert_eq!(code(other.conn.list_devices().await), ErrorCode::NotAuthenticated);
 
@@ -82,15 +85,19 @@ async fn signing_in_and_out_keeps_the_id() {
     let ev = tokio::time::timeout(Duration::from_secs(5), laptop.events.recv()).await.unwrap().unwrap();
     assert!(matches!(ev, Event::DevicePresence { device_id, online: true } if device_id == id));
     assert_eq!(laptop.conn.list_devices().await.unwrap().len(), 2);
+    let info = laptop.conn.lookup_device(id).await.unwrap();
+    assert_eq!(info.identity.account.map(|c| c.username), Some("alice".into()), "the account's devices see it");
 
     desktop.conn.detach(&mut desktop.creds).await.unwrap();
     assert_eq!(desktop.creds.username(), None);
     let ev = tokio::time::timeout(Duration::from_secs(5), laptop.events.recv()).await.unwrap().unwrap();
     assert!(matches!(ev, Event::DevicePresence { device_id, online: false } if device_id == id));
     assert_eq!(laptop.conn.list_devices().await.unwrap().len(), 1);
-    // Still online under the same ID, just without the account.
-    let info = laptop.conn.lookup_device(id).await.unwrap();
+    // Still online under the same ID, just without the account (and not the account's to look
+    // up any more).
+    let info = desktop.conn.lookup_device(id).await.unwrap();
     assert!(info.online && info.identity.account.is_none());
+    assert_eq!(code(laptop.conn.lookup_device(id).await), ErrorCode::NotFound);
     ts.stop().await;
 }
 
@@ -317,5 +324,35 @@ async fn a_removed_device_leaves_the_account_but_keeps_its_id() {
     // Other users cannot remove your devices.
     let bob = ts.signup("bob", "correct horse battery", "pc").await;
     assert_eq!(code(bob.conn.remove_device(laptop.creds.device_id).await), ErrorCode::NotFound);
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn the_health_check_answers_with_the_servers_certificate() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let addr: std::net::SocketAddr = ts.addr.parse().unwrap();
+    somedesk_server::check(addr, &ts.data_dir).await.unwrap();
+    // Another certificate is another server.
+    let other = std::env::temp_dir().join(format!("somedesk-check-{}", std::process::id()));
+    somedesk_server::tls::load_or_create(&other).unwrap();
+    assert!(somedesk_server::check(addr, &other).await.is_err());
+    std::fs::remove_dir_all(&other).unwrap();
+    // Nobody there.
+    assert!(somedesk_server::check("127.0.0.1:9".parse().unwrap(), &ts.data_dir).await.is_err());
+    ts.stop().await;
+}
+
+#[tokio::test]
+async fn vault_versions_past_the_last_are_conflicts() {
+    let Some(ts) = TestServer::start().await else {
+        return;
+    };
+    let alice = ts.signup("alice", "correct horse battery", "laptop").await;
+    for base in [u64::MAX, i64::MAX as u64, 1u64 << 63] {
+        assert_eq!(code(alice.conn.put_vault(base, vec![1]).await), ErrorCode::Conflict, "{base}");
+    }
+    assert_eq!(alice.conn.put_vault(0, vec![1]).await.unwrap(), 1);
     ts.stop().await;
 }
