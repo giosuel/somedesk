@@ -85,7 +85,7 @@ impl TestServer {
         })
     }
 
-    pub async fn connect(&self) -> (Arc<ServerConn>, mpsc::UnboundedReceiver<Event>) {
+    pub async fn connect(&self) -> (Arc<ServerConn>, mpsc::Receiver<Event>) {
         ServerConn::connect(&self.addr, Some(self.fingerprint)).await.expect("connect to server")
     }
 
@@ -134,7 +134,7 @@ impl TestServer {
 
 pub struct Device {
     pub conn: Arc<ServerConn>,
-    pub events: mpsc::UnboundedReceiver<Event>,
+    pub events: mpsc::Receiver<Event>,
     pub creds: DeviceCredentials,
 }
 

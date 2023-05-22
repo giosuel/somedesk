@@ -87,7 +87,7 @@ impl Controller {
 
     pub(super) fn connect(&self, input: String) {
         if let Some(device_id) = self.target(&input) {
-            self.start_viewer(device_id, Ask::Person, false);
+            self.start_viewer(device_id, Ask::Person, None);
         }
     }
 
@@ -144,10 +144,12 @@ impl Controller {
             saved.is_none().then(|| (device_id, typed, ui.get_pw_save())).filter(|(_, _, s)| *s != SaveIn::Nowhere);
         ui.set_pw_error("".into());
         ui.set_pw_busy(true);
-        self.start_viewer(device_id, Ask::Password { password, code }, false);
+        self.start_viewer(device_id, Ask::Password { password, code }, None);
     }
 
-    fn start_viewer(&self, device_id: u64, ask: Ask, trusted_change: bool) {
+    /// `accepted`: the changed identity the user just accepted for `device_id`; only exactly
+    /// that one connects without the warning again.
+    fn start_viewer(&self, device_id: u64, ask: Ask, accepted: Option<DeviceIdentity>) {
         let (conn, creds) = {
             let st = self.0.state.lock().unwrap();
             (st.conn.clone(), st.creds.clone())
@@ -173,7 +175,7 @@ impl Controller {
         });
         let this = self.clone();
         let task = self.0.rt.spawn(async move {
-            let result = this.run_viewer(conn, creds, device_id, ask, trusted_change).await;
+            let result = this.run_viewer(conn, creds, device_id, ask, accepted).await;
             this.0.state.lock().unwrap().viewer_input = None;
             this.0.busy.store(false, Ordering::SeqCst);
             this.ui(|ui| {
@@ -210,7 +212,7 @@ impl Controller {
         creds: DeviceCredentials,
         device_id: u64,
         ask: Ask,
-        trusted_change: bool,
+        accepted: Option<DeviceIdentity>,
     ) -> somedesk_client::Result<Option<SessionEnd>> {
         let (mut ch, host_info, route) = session::connect_routed(&conn, &creds, device_id).await?;
         let route_label = match route {
@@ -231,6 +233,10 @@ impl Controller {
                 (status, _) => status,
             }
         };
+        // Accepting a changed key accepts that key only: if the server swaps in yet another one
+        // for the reconnection, the user is asked again.
+        let key = |id: &DeviceIdentity| (id.device_pk, id.account.as_ref().map(|c| c.identity_pk));
+        let trusted_change = accepted.as_ref().is_some_and(|a| key(a) == key(&peer));
         if let (Some(PeerStatus::Changed(changed)), false, false) = (&status, own_account, trusted_change) {
             // Stop before the host sees anything from us; let the user decide.
             drop(ch);
@@ -361,7 +367,7 @@ impl Controller {
         if with_password {
             self.open_password_dialog(device_id.to_string());
         } else {
-            self.start_viewer(device_id, Ask::Person, true);
+            self.start_viewer(device_id, Ask::Person, Some(identity));
         }
     }
 }

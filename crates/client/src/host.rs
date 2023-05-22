@@ -13,6 +13,11 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, watch};
 
+/// Control messages (pongs, clipboard) waiting to be sent.
+const CTRL_QUEUE: usize = 64;
+/// Input events waiting to be injected; when full, the session stops reading from the viewer.
+const INPUT_QUEUE: usize = 256;
+
 #[derive(Clone, Debug)]
 pub struct HostSettings {
     pub max_fps: u32,
@@ -68,8 +73,8 @@ pub async fn serve(
     shared.running.store(true, Ordering::Relaxed);
     shared.keyframe.store(true, Ordering::Relaxed);
     let (video_tx, mut video_rx) = mpsc::channel::<SessionMsg>(2);
-    let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<SessionMsg>();
-    let (input_tx, input_rx) = std::sync::mpsc::channel::<SessionMsg>();
+    let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<SessionMsg>(CTRL_QUEUE);
+    let (input_tx, input_rx) = mpsc::channel::<SessionMsg>(INPUT_QUEUE);
 
     let capture = {
         let (shared, settings) = (shared.clone(), settings.clone());
@@ -116,7 +121,8 @@ pub async fn serve(
                 Some(SessionMsg::RequestKeyframe) => shared.keyframe.store(true, Ordering::Relaxed),
                 Some(SessionMsg::SelectMonitor { id }) => *shared.monitor_request.lock().unwrap() = Some(id),
                 Some(SessionMsg::Ping { t }) => {
-                    let _ = ctrl_tx.send(SessionMsg::Pong { t });
+                    // A viewer that pings faster than it reads gets fewer answers.
+                    let _ = ctrl_tx.try_send(SessionMsg::Pong { t });
                 }
                 Some(
                     m @ (SessionMsg::PointerMove { .. }
@@ -126,7 +132,7 @@ pub async fn serve(
                 ) => {
                     if !view_only {
                         input_events += 1;
-                        let _ = input_tx.send(m);
+                        let _ = input_tx.send(m).await;
                     }
                 }
                 Some(SessionMsg::Clipboard { text }) => {
@@ -167,6 +173,8 @@ pub async fn serve(
     // `blocking_send`, and the inject thread exits when its input channel closes.
     drop(video_rx);
     drop(input_tx);
+    // Unblocks the clipboard thread if it waits for room in the queue.
+    drop(ctrl_rx);
     let clipboard = clipboard.map(ClipboardSync::stop);
     let _ = tokio::task::spawn_blocking(move || {
         let _ = capture.join();
@@ -322,13 +330,13 @@ fn capture_loop(
     }
 }
 
-fn inject_loop(mut injector: Box<dyn Injector>, rx: std::sync::mpsc::Receiver<SessionMsg>, shared: Arc<CaptureShared>) {
+fn inject_loop(mut injector: Box<dyn Injector>, mut rx: mpsc::Receiver<SessionMsg>, shared: Arc<CaptureShared>) {
     let mut size = injector.screen_size().unwrap_or((1, 1));
     let mut size_checked = Instant::now();
     let mut keys_down: HashSet<u32> = HashSet::new();
     let mut buttons_down: HashSet<u8> = HashSet::new();
 
-    for msg in rx {
+    while let Some(msg) = rx.blocking_recv() {
         if size_checked.elapsed() > Duration::from_secs(1) {
             size = injector.screen_size().unwrap_or(size);
             size_checked = Instant::now();

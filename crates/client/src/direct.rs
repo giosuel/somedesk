@@ -17,7 +17,7 @@
 use crate::tls::PinningVerifier;
 use crate::{ClientError, Result};
 use somedesk_proto::control::{DirectHello, SessionId};
-use somedesk_proto::frame::{read_msg, write_msg};
+use somedesk_proto::frame::{read_msg_limited, write_msg};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,10 @@ const PUNCH_TTLS: [u32; 2] = [2, 3];
 const PUNCH_LEAD: Duration = Duration::from_millis(150);
 /// Concurrent incoming direct connections that have not yet named a session.
 const MAX_PENDING_INCOMING: usize = 32;
+/// A [`DirectHello`] is a session ID; nothing larger is read before one.
+const MAX_HELLO: usize = 64;
+/// How long an incoming connection has to name a session we wait for before it is closed.
+const NAME_SESSION_WITHIN: Duration = Duration::from_secs(15);
 
 pub type StreamPair = (quinn::SendStream, quinn::RecvStream);
 
@@ -224,17 +228,27 @@ async fn accept_loop(hub: std::sync::Weak<DirectHub>, endpoint: quinn::Endpoint)
         };
         let hub = hub.clone();
         tokio::spawn(async move {
-            let conn = match tokio::time::timeout(Duration::from_secs(5), incoming).await {
+            // The permit only covers the time until the connection names a session we wait for;
+            // one that doesn't within `NAME_SESSION_WITHIN` is closed.
+            let mut permit = Some(permit);
+            let named_by = tokio::time::Instant::now() + NAME_SESSION_WITHIN;
+            let limit = |permit: &Option<_>, d: Duration| match permit {
+                Some(_) => d.min(named_by.saturating_duration_since(tokio::time::Instant::now())),
+                None => d,
+            };
+            let conn = match tokio::time::timeout(limit(&permit, Duration::from_secs(5)), incoming).await {
                 Ok(Ok(c)) => c,
                 _ => return,
             };
             // A peer opens one stream per session attempt; route each by its hello.
             loop {
-                let Ok(Ok((send, mut recv))) = tokio::time::timeout(Duration::from_secs(10), conn.accept_bi()).await
-                else {
+                let wait = limit(&permit, Duration::from_secs(10));
+                let Ok(Ok((send, mut recv))) = tokio::time::timeout(wait, conn.accept_bi()).await else {
                     break;
                 };
-                let hello: DirectHello = match tokio::time::timeout(Duration::from_secs(5), read_msg(&mut recv)).await {
+                let wait = limit(&permit, Duration::from_secs(5));
+                let hello: DirectHello = match tokio::time::timeout(wait, read_msg_limited(&mut recv, MAX_HELLO)).await
+                {
                     Ok(Ok(Some(h))) => h,
                     _ => break,
                 };
@@ -243,11 +257,11 @@ async fn accept_loop(hub: std::sync::Weak<DirectHub>, endpoint: quinn::Endpoint)
                 match waiter {
                     Some(tx) => {
                         let _ = tx.send((send, recv));
+                        permit = None;
                     }
                     None => tracing::debug!("direct stream for an unknown session"),
                 }
             }
-            drop(permit);
         });
     }
 }
