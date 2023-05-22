@@ -9,11 +9,13 @@
 //! The virtual keyboard brings its own keymap. Like `wtype`, it is built on the fly: every
 //! keysym the viewer presses gets a keycode of its own, so any character can be typed whatever
 //! the layout of the computer. The usual keys are there from the start; the keymap is uploaded
-//! again when another keysym comes along.
+//! again when another keysym comes along, and when it is full, the key of an earlier one that
+//! isn't held down is reused.
 
 use crate::Injector;
 use anyhow::{anyhow, bail, Context};
 use rustix::fs::{memfd_create, MemfdFlags};
+use std::collections::HashSet;
 use std::io::Write;
 use std::os::fd::AsFd;
 use std::time::Instant;
@@ -52,6 +54,16 @@ pub struct WlrInjector {
     layout: Option<((i32, i32), (u32, u32))>,
     keymap: Keymap,
     started: Instant,
+}
+
+/// Whether the compositor offers the virtual pointer and keyboard protocols.
+pub fn available() -> bool {
+    let Ok(conn) = Connection::connect_to_env() else { return false };
+    let Ok((globals, _)) = registry_queue_init::<State>(&conn) else { return false };
+    globals.contents().with_list(|list| {
+        let has = |name: &str| list.iter().any(|g| g.interface == name);
+        has(ZwlrVirtualPointerManagerV1::interface().name) && has(ZwpVirtualKeyboardManagerV1::interface().name)
+    })
 }
 
 impl WlrInjector {
@@ -195,9 +207,10 @@ impl Injector for WlrInjector {
         let (code, new) = if down {
             self.keymap.press(keysym)
         } else {
+            self.keymap.held.remove(&keysym);
             match self.keymap.code(keysym) {
                 Some(code) => (code, false),
-                // Pressed before the keymap was rebuilt; its key is gone already.
+                // Never pressed: nothing to release.
                 None => return Ok(()),
             }
         };
@@ -368,12 +381,16 @@ struct Keymap {
     pressed_mods: Vec<u32>,
     depressed: u32,
     locked: u32,
+    /// Keysyms held down: their keys stay where they are until released.
+    held: HashSet<u32>,
+    /// Where to look for a key to reuse next once the keymap is full.
+    next_reuse: usize,
 }
 
 impl Default for Keymap {
     fn default() -> Self {
         let keysyms = MODIFIERS.iter().map(|(k, _)| *k).chain(common_keysyms()).collect();
-        Self { keysyms, pressed_mods: Vec::new(), depressed: 0, locked: 0 }
+        Self { keysyms, pressed_mods: Vec::new(), depressed: 0, locked: 0, held: HashSet::new(), next_reuse: 0 }
     }
 }
 
@@ -390,15 +407,25 @@ impl Keymap {
 
     /// The evdev code for pressing `keysym`, and whether the keymap changed to make room for it.
     fn press(&mut self, keysym: u32) -> (u32, bool) {
+        self.held.insert(keysym);
         if let Some(code) = self.code(keysym) {
             return (code, false);
         }
-        if self.keysyms.len() >= MAX_KEYS {
-            // Full: start over with the keys there from the start.
-            self.keysyms = Self::default().keysyms;
+        if self.keysyms.len() < MAX_KEYS {
+            self.keysyms.push(keysym);
+            return (self.keysyms.len() as u32, true);
         }
-        self.keysyms.push(keysym);
-        (self.keysyms.len() as u32, true)
+        // Full: take over the key of a keysym added on the way, in turn, but never one that is
+        // held down: the compositor still has that key down and has to see it released.
+        let base = MODIFIERS.len() + common_keysyms().count();
+        let n = MAX_KEYS - base;
+        let slot = (0..n)
+            .map(|i| base + (self.next_reuse + i) % n)
+            .find(|&i| !self.held.contains(&self.keysyms[i]))
+            .unwrap_or(base + self.next_reuse % n);
+        self.next_reuse = slot - base + 1;
+        self.keysyms[slot] = keysym;
+        (slot as u32 + 1, true)
     }
 
     /// Tracks modifier keys; returns the new modifier state if `keysym` changed it.
@@ -470,16 +497,24 @@ mod tests {
     }
 
     #[test]
-    fn a_full_keymap_starts_over() {
+    fn a_full_keymap_reuses_keys_not_held() {
         let mut map = Keymap::default();
         let base = map.keysyms.len();
-        for k in 0..(MAX_KEYS - base) as u32 {
+        // The first added keysym stays held down; all others are released again.
+        let (held, _) = map.press(0x0100_1000);
+        for k in 1..(MAX_KEYS - base) as u32 {
             map.press(0x0100_1000 + k);
+            map.held.remove(&(0x0100_1000 + k));
         }
         assert_eq!(map.keysyms.len(), MAX_KEYS);
         let (code, new) = map.press(0x0100_263a);
         assert!(new);
-        assert_eq!(code as usize, base + 1, "back to the keys there from the start, plus this one");
+        assert_eq!(code as usize, base + 2, "the first key not held down is reused");
+        assert_eq!(map.code(0x0100_1000), Some(held), "the held key keeps its code");
+        assert_eq!(map.code(0x0100_1001), None);
+        assert!(map.code(0x61).is_some_and(|c| (c as usize) <= base), "the usual keys stay");
+        let (next, _) = map.press(0x0100_263b);
+        assert_eq!(next as usize, base + 3, "then the next one");
     }
 
     #[test]

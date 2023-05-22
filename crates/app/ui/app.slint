@@ -213,6 +213,7 @@ export component AppWindow inherits Window {
     callback pointer-button(int, bool);
     callback scroll(length, length);
     callback key(string, bool);
+    callback release-input();
     in-out property <string> session-soft-text;
     callback soft-input(string, bool, bool);
     callback soft-key(string, bool, bool);
@@ -375,6 +376,7 @@ export component AppWindow inherits Window {
         pointer-button(b, d) => { root.pointer-button(b, d); }
         scroll(dx, dy) => { root.scroll(dx, dy); }
         key(t, d) => { root.key(t, d); }
+        release-input => { root.release-input(); }
     }
 
     if root.page == Page.setup && root.mobile: MobileSetupPage {

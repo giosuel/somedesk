@@ -148,6 +148,17 @@ pub fn will_ask_permission(state_dir: Option<&std::path::Path>) -> bool {
         && !state_dir.is_some_and(|d| d.join(RESTORE_TOKEN_FILE).exists())
 }
 
+/// Whether accepting a session here also gives the viewer the mouse and keyboard without the
+/// desktop asking about it, although it asks about the screen: wlroots-style compositors
+/// (Hyprland, Sway), whose portal only shares the screen while input goes through their virtual
+/// input protocols. The app's own prompt is then the only consent to control.
+pub fn control_without_desktop_consent() -> bool {
+    #[cfg(target_os = "linux")]
+    return detect_linux_backend() == LinuxBackend::Portal && linux::wlr::available();
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
 /// Opens the screen for a session.
 ///
 /// On Wayland this asks the person at the computer for permission through the desktop portal

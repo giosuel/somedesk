@@ -259,7 +259,12 @@ impl Controller {
         self.ui(move |ui| ui.set_outgoing_target(name.into()));
 
         let (input_tx, input_rx) = mpsc::unbounded_channel();
-        self.0.state.lock().unwrap().viewer_input = Some(input_tx);
+        {
+            let mut st = self.0.state.lock().unwrap();
+            st.viewer_input = Some(input_tx);
+            st.held_keys.clear();
+            st.held_buttons.clear();
+        }
 
         let this = self.clone();
         let peer_label = device_label(device_id, &peer);

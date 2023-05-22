@@ -65,6 +65,8 @@ export component SessionPage inherits Rectangle {
     callback pointer-button(int, bool);
     callback scroll(length, length);
     callback key(string, bool);
+    /// The remote screen lost the keyboard focus: release what is held there.
+    callback release-input();
     property <bool> compact: root.monitors.length > 2 && root.width < 1300px;
     background: #0a0b0d;
 
@@ -170,6 +172,7 @@ export component SessionPage inherits Rectangle {
                     root.key(e.text, false);
                     accept
                 }
+                focus-lost => { root.release-input(); }
                 TouchArea {
                     mouse-cursor: default;
                     pointer-event(e) => {

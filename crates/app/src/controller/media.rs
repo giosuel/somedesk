@@ -277,8 +277,39 @@ impl Controller {
     }
 
     pub(super) fn send_input(&self, msg: SessionMsg) {
-        if let Some(tx) = &self.0.state.lock().unwrap().viewer_input {
+        let mut st = self.0.state.lock().unwrap();
+        match msg {
+            SessionMsg::Key { keysym, down } if down => {
+                st.held_keys.insert(keysym);
+            }
+            SessionMsg::Key { keysym, .. } => {
+                st.held_keys.remove(&keysym);
+            }
+            SessionMsg::PointerButton { button, down } if down => {
+                st.held_buttons.insert(button);
+            }
+            SessionMsg::PointerButton { button, .. } => {
+                st.held_buttons.remove(&button);
+            }
+            _ => {}
+        }
+        if let Some(tx) = &st.viewer_input {
             let _ = tx.send(msg);
+        }
+    }
+
+    /// Lets go of every key and button still held on the remote computer: the viewer window
+    /// lost the focus (after Alt+Tab, say), so their releases won't come here.
+    pub(super) fn release_input(&self) {
+        let (keys, buttons) = {
+            let mut st = self.0.state.lock().unwrap();
+            (std::mem::take(&mut st.held_keys), std::mem::take(&mut st.held_buttons))
+        };
+        for keysym in keys {
+            self.send_input(SessionMsg::Key { keysym, down: false });
+        }
+        for button in buttons {
+            self.send_input(SessionMsg::PointerButton { button, down: false });
         }
     }
 
