@@ -14,8 +14,20 @@ use somedesk_client::ClientError;
 enum Ask {
     /// The person at the other computer decides.
     Person,
-    /// Unattended access with this password and code.
-    Password { password: String, code: String },
+    /// Unattended access with this password and code; a newly typed password is kept where
+    /// the user chose once it worked.
+    Password { password: String, code: String, save: Option<SaveIn> },
+}
+
+/// Whether the user has to decide about a host whose identity changed before connecting: not
+/// for the account's own devices, nor for the exact key the user just approved (`approved`).
+fn must_ask_about(
+    status: Option<&PeerStatus>,
+    own_account: bool,
+    approved: Option<&[u8; 32]>,
+    peer_pk: &[u8; 32],
+) -> bool {
+    matches!(status, Some(PeerStatus::Changed(_))) && !own_account && approved != Some(peer_pk)
 }
 
 impl Controller {
@@ -29,6 +41,7 @@ impl Controller {
         let c = self.clone();
         ui.on_pw_cancel(move || {
             c.0.state.lock().unwrap().pw_target = None;
+            c.cancel_viewer();
             c.ui(|ui| {
                 ui.set_pw_visible(false);
                 ui.set_pw_password("".into());
@@ -36,20 +49,20 @@ impl Controller {
             });
         });
         let c = self.clone();
-        ui.on_identity_changed_answer(move |trust| c.identity_changed_answer(trust));
-        let c = self.clone();
-        ui.on_outgoing_cancel(move || {
-            let task = c.0.state.lock().unwrap().viewer_task.take();
-            if let Some(t) = task {
-                t.abort();
+        ui.on_pw_use_other(move || {
+            // The saved password didn't work (the other computer changed it, say): type one.
+            if let Some((_, saved)) = c.0.state.lock().unwrap().pw_target.as_mut() {
+                *saved = None;
             }
-            c.0.busy.store(false, Ordering::SeqCst);
             c.ui(|ui| {
-                ui.set_outgoing_visible(false);
-                ui.set_connect_busy(false);
-                ui.set_pw_busy(false);
+                ui.set_pw_saved(false);
+                ui.set_pw_error("".into());
             });
         });
+        let c = self.clone();
+        ui.on_identity_changed_answer(move |trust| c.identity_changed_answer(trust));
+        let c = self.clone();
+        ui.on_outgoing_cancel(move || c.cancel_viewer());
         let c = self.clone();
         ui.on_disconnect(move || {
             // Dropping the input sender ends the viewer session gracefully.
@@ -68,6 +81,17 @@ impl Controller {
                     Err(e) => this.toast(format!("Could not remove it: {e}"), true),
                 }
             });
+        });
+    }
+
+    /// Stops the connection being set up. Its task cleans up (and frees the session) itself.
+    fn cancel_viewer(&self) {
+        if let Some(cancel) = self.0.state.lock().unwrap().viewer_cancel.take() {
+            let _ = cancel.send(());
+        }
+        self.ui(|ui| {
+            ui.set_outgoing_visible(false);
+            ui.set_pw_busy(false);
         });
     }
 
@@ -139,17 +163,15 @@ impl Controller {
             ui.set_pw_error("Enter the password and the 6-digit code.".into());
             return;
         }
-        // Remember where to keep a newly typed password, once it turns out to be right.
-        self.0.state.lock().unwrap().password_to_save =
-            saved.is_none().then(|| (device_id, typed, ui.get_pw_save())).filter(|(_, _, s)| *s != SaveIn::Nowhere);
+        // Where to keep a newly typed password, once it turns out to be right.
+        let save = Some(ui.get_pw_save()).filter(|s| saved.is_none() && *s != SaveIn::Nowhere);
         ui.set_pw_error("".into());
         ui.set_pw_busy(true);
-        self.start_viewer(device_id, Ask::Password { password, code }, None);
+        self.start_viewer(device_id, Ask::Password { password, code, save }, None);
     }
 
-    /// `accepted`: the changed identity the user just accepted for `device_id`; only exactly
-    /// that one connects without the warning again.
-    fn start_viewer(&self, device_id: u64, ask: Ask, accepted: Option<DeviceIdentity>) {
+    /// Connects to `device_id`. `approved` is a changed host key the user just decided to trust.
+    fn start_viewer(&self, device_id: u64, ask: Ask, approved: Option<[u8; 32]>) {
         let (conn, creds) = {
             let st = self.0.state.lock().unwrap();
             (st.conn.clone(), st.creds.clone())
@@ -173,10 +195,21 @@ impl Controller {
                 ui.set_outgoing_visible(true);
             }
         });
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        self.0.state.lock().unwrap().viewer_cancel = Some(cancel_tx);
         let this = self.clone();
-        let task = self.0.rt.spawn(async move {
-            let result = this.run_viewer(conn, creds, device_id, ask, accepted).await;
-            this.0.state.lock().unwrap().viewer_input = None;
+        self.0.rt.spawn(async move {
+            // Cancelling stops the connection here, so the cleanup below always runs.
+            let result = tokio::select! {
+                r = this.run_viewer(conn, creds, device_id, ask, approved) => r,
+                Ok(()) = cancel_rx => Ok(None),
+            };
+            this.end_transfers();
+            {
+                let mut st = this.0.state.lock().unwrap();
+                st.viewer_input = None;
+                st.viewer_cancel = None;
+            }
             this.0.busy.store(false, Ordering::SeqCst);
             this.ui(|ui| {
                 ui.set_outgoing_visible(false);
@@ -203,7 +236,6 @@ impl Controller {
                 Err(e) => this.toast(e.to_string(), true),
             }
         });
-        self.0.state.lock().unwrap().viewer_task = Some(task);
     }
 
     async fn run_viewer(
@@ -212,7 +244,7 @@ impl Controller {
         creds: DeviceCredentials,
         device_id: u64,
         ask: Ask,
-        accepted: Option<DeviceIdentity>,
+        approved: Option<[u8; 32]>,
     ) -> somedesk_client::Result<Option<SessionEnd>> {
         let (mut ch, host_info, route) = session::connect_routed(&conn, &creds, device_id).await?;
         let route_label = match route {
@@ -233,11 +265,9 @@ impl Controller {
                 (status, _) => status,
             }
         };
-        // Accepting a changed key accepts that key only: if the server swaps in yet another one
-        // for the reconnection, the user is asked again.
-        let key = |id: &DeviceIdentity| (id.device_pk, id.account.as_ref().map(|c| c.identity_pk));
-        let trusted_change = accepted.as_ref().is_some_and(|a| key(a) == key(&peer));
-        if let (Some(PeerStatus::Changed(changed)), false, false) = (&status, own_account, trusted_change) {
+        if let Some(PeerStatus::Changed(changed)) =
+            status.as_ref().filter(|s| must_ask_about(Some(s), own_account, approved.as_ref(), &peer.device_pk))
+        {
             // Stop before the host sees anything from us; let the user decide.
             drop(ch);
             let device = matches!(changed, Changed::Device { .. });
@@ -256,21 +286,23 @@ impl Controller {
             });
             return Ok(None);
         }
-        match &ask {
-            Ask::Person => access::request_access(&mut ch).await?,
-            Ask::Password { password, code } => access::sign_in_unattended(&mut ch, password, code).await?,
-        }
+        let password_to_save = match &ask {
+            Ask::Person => {
+                access::request_access(&mut ch).await?;
+                None
+            }
+            Ask::Password { password, code, save } => {
+                access::sign_in_unattended(&mut ch, password, code).await?;
+                save.map(|s| (password.clone(), s))
+            }
+        };
+        let password_to_save = Mutex::new(password_to_save);
         let peer_fp = fingerprint(&peer.device_pk);
         let name = peer.name.clone();
         self.ui(move |ui| ui.set_outgoing_target(name.into()));
 
         let (input_tx, input_rx) = mpsc::unbounded_channel();
-        {
-            let mut st = self.0.state.lock().unwrap();
-            st.viewer_input = Some(input_tx);
-            st.held_keys.clear();
-            st.held_buttons.clear();
-        }
+        self.0.state.lock().unwrap().viewer_input = Some(input_tx);
 
         let this = self.clone();
         let peer_label = device_label(device_id, &peer);
@@ -283,9 +315,9 @@ impl Controller {
                 this.with_book(|b| b.pin(device_id, remembered.device_pk, remembered.username()));
                 this.remember_recent(device_id, peer_label.clone());
                 // A password that worked goes where the user wanted it.
-                if let Some((id, password, save)) = this.0.state.lock().unwrap().password_to_save.take() {
+                if let Some((password, save)) = password_to_save.lock().unwrap().take() {
                     let this = this.clone();
-                    this.0.rt.clone().spawn_blocking(move || this.store_password(id, Some(&password), save));
+                    this.0.rt.clone().spawn_blocking(move || this.store_password(device_id, Some(&password), save));
                 }
                 this.0.state.lock().unwrap().soft_text = SOFT_PAD.to_owned();
                 let (label, id, fp) = (peer_label.clone(), peer_id.clone(), peer_fp.clone());
@@ -350,9 +382,7 @@ impl Controller {
         // Files from the host could be anything, so the user decides about each one.
         let files = self.start_transfers(AcceptPolicy::Ask, &device_label(device_id, &peer));
         let extras = somedesk_client::SessionExtras { clipboard: self.clipboard(), files: Some(files) };
-        let result = viewer::run(ch, sink, input_rx, extras).await;
-        self.end_transfers();
-        result.map(Some)
+        viewer::run(ch, sink, input_rx, extras).await.map(Some)
     }
 
     fn identity_changed_answer(&self, trust: bool) {
@@ -367,7 +397,26 @@ impl Controller {
         if with_password {
             self.open_password_dialog(device_id.to_string());
         } else {
-            self.start_viewer(device_id, Ask::Person, Some(identity));
+            self.start_viewer(device_id, Ask::Person, Some(identity.device_pk));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_changed_identity_is_asked_about_unless_it_is_the_approved_key() {
+        let changed = PeerStatus::Changed(Changed::Device { previous_pk: [1; 32] });
+        let (x, y) = ([2u8; 32], [3u8; 32]);
+        assert!(must_ask_about(Some(&changed), false, None, &x));
+        // The user approved X: connecting again with X goes ahead.
+        assert!(!must_ask_about(Some(&changed), false, Some(&x), &x));
+        // But a different key Y on that connection is asked about again.
+        assert!(must_ask_about(Some(&changed), false, Some(&x), &y));
+        assert!(!must_ask_about(Some(&changed), true, None, &y));
+        assert!(!must_ask_about(Some(&PeerStatus::Known), false, None, &y));
+        assert!(!must_ask_about(None, false, None, &y));
     }
 }

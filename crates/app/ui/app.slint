@@ -47,6 +47,7 @@ export component AppWindow inherits Window {
     in property <bool> account-need-code;
     in-out property <string> account-code;
     in property <bool> account-need-invite;
+    in property <bool> account-required;
     in-out property <string> account-invite;
     in property <string> account-purpose;
     in property <string> account-error;
@@ -134,6 +135,7 @@ export component AppWindow inherits Window {
     in property <bool> pw-busy;
     callback pw-submit();
     callback pw-cancel();
+    callback pw-use-other();
 
     // Address-book entry
     in property <bool> entry-visible;
@@ -186,7 +188,10 @@ export component AppWindow inherits Window {
     in property <TrustLevel> incoming-trust;
     in property <string> incoming-previous-fingerprint;
     in property <string> incoming-note;
-    callback incoming-answer(bool);
+    /// The prompt's number, given back with the answer, and whether Accept works yet.
+    in property <int> incoming-request;
+    in property <bool> incoming-ready;
+    callback incoming-answer(int, bool);
 
     // Outgoing request
     in property <bool> outgoing-visible;
@@ -532,6 +537,7 @@ export component AppWindow inherits Window {
         code <=> root.account-code;
         need-invite: root.account-need-invite;
         invite <=> root.account-invite;
+        account-required: root.account-required;
         purpose: root.account-purpose;
         error: root.account-error;
         busy: root.account-busy;
@@ -551,6 +557,7 @@ export component AppWindow inherits Window {
         busy: root.pw-busy;
         submit => { root.pw-submit(); }
         cancel => { root.pw-cancel(); }
+        use-other => { root.pw-use-other(); }
     }
 
     if root.secret-visible: SecretDialog {
@@ -587,7 +594,8 @@ export component AppWindow inherits Window {
         trust: root.incoming-trust;
         previous-fingerprint: root.incoming-previous-fingerprint;
         note: root.incoming-note;
-        answer(ok) => { root.incoming-answer(ok); }
+        ready: root.incoming-ready;
+        answer(ok) => { root.incoming-answer(root.incoming-request, ok); }
     }
 
     if root.toast-text != "": Toast {

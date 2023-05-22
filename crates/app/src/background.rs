@@ -106,6 +106,9 @@ pub struct InstanceListener {
     listener: Option<std::os::unix::net::UnixListener>,
     #[cfg(not(unix))]
     listener: std::net::TcpListener,
+    /// What a knock has to bring (from the port file), so other programs can't knock.
+    #[cfg(not(unix))]
+    token: String,
 }
 
 /// Claims `dir` for this process, or asks the instance that has it to show its window.
@@ -127,26 +130,79 @@ pub fn claim(dir: &Path) -> Instance {
             .ok();
         Instance::First(InstanceListener { listener })
     }
-    // No Unix sockets: a port on localhost, written to a file in the directory.
+    // No Unix sockets: a named mutex says whether another instance runs (the system releases
+    // it when a process ends, also after a crash), and a port on localhost, written to a file
+    // in the directory with a token, takes its knocks.
     #[cfg(not(unix))]
     {
         use std::io::Write;
         use std::net::{TcpListener, TcpStream};
         let port_file = dir.join("instance.port");
-        if let Some(port) = std::fs::read_to_string(&port_file).ok().and_then(|p| p.trim().parse::<u16>().ok()) {
-            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-            if let Ok(mut other) = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)) {
-                let _ = other.write_all(b"show\n");
-                return Instance::Other;
+        #[cfg(windows)]
+        if !claim_mutex(dir) {
+            let knock =
+                std::fs::read_to_string(&port_file).ok().and_then(|t| parse_port_file(&t)).and_then(|(port, token)| {
+                    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                    let mut other = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300)).ok()?;
+                    other.write_all(knock_line(&token).as_bytes()).ok()
+                });
+            if knock.is_none() {
+                tracing::warn!("SomeDesk runs already, but its window couldn't be shown");
             }
+            return Instance::Other;
         }
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a port on localhost");
+        let token = hex::encode(rand::random::<[u8; 16]>());
         let _ = std::fs::create_dir_all(dir);
         if let Ok(addr) = listener.local_addr() {
-            let _ = std::fs::write(&port_file, addr.port().to_string());
+            let _ = std::fs::write(&port_file, format!("{} {token}", addr.port()));
         }
-        Instance::First(InstanceListener { listener })
+        Instance::First(InstanceListener { listener, token })
     }
+}
+
+/// Takes the named mutex for `dir` for the rest of this process; false if another process has
+/// it. If there's no mutex to be had, this start runs on its own.
+#[cfg(windows)]
+fn claim_mutex(dir: &Path) -> bool {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    let name: Vec<u16> = format!("Local\\SomeDesk-{:016x}", dir_hash(dir)).encode_utf16().chain([0]).collect();
+    // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the call; no security
+    // attributes. The handle is never closed: the mutex is held until the process ends.
+    let (handle, error) = unsafe { (CreateMutexW(std::ptr::null(), 0, name.as_ptr()), GetLastError()) };
+    if handle.is_null() {
+        tracing::warn!("cannot check for other instances (error {error})");
+        return true;
+    }
+    error != ERROR_ALREADY_EXISTS
+}
+
+/// The port and token in an `instance.port` file.
+#[cfg(any(not(unix), test))]
+fn parse_port_file(text: &str) -> Option<(u16, String)> {
+    let (port, token) = text.trim().split_once(' ')?;
+    Some((port.parse().ok()?, token.to_owned())).filter(|(_, t)| !t.is_empty())
+}
+
+/// What a second start sends to the first one.
+#[cfg(any(not(unix), test))]
+fn knock_line(token: &str) -> String {
+    format!("show {token}\n")
+}
+
+/// Whether `line` is a knock with the right token.
+#[cfg(any(not(unix), test))]
+fn is_knock(line: &str, token: &str) -> bool {
+    line.trim_end().strip_prefix("show ") == Some(token)
+}
+
+/// The same for `dir` from every build, so a new version finds the running one (FNV-1a).
+fn dir_hash(dir: &Path) -> u64 {
+    dir.as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 /// The socket in `dir`, or, where that path would be too long for a socket (deep home
@@ -159,12 +215,7 @@ fn socket_path(dir: &Path) -> std::path::PathBuf {
     if path.as_os_str().len() < MAX {
         return path;
     }
-    // FNV-1a: the same name from every build, so a new version finds the running one.
-    let hash = dir
-        .as_os_str()
-        .as_encoded_bytes()
-        .iter()
-        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+    let hash = dir_hash(dir);
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
     runtime.join(format!("somedesk-{hash:016x}.sock"))
 }
@@ -192,11 +243,33 @@ impl InstanceListener {
         std::thread::Builder::new()
             .name("somedesk-instance".into())
             .spawn(move || {
+                use std::io::{BufRead, Read};
                 for stream in self.listener.incoming().flatten() {
-                    drop(stream);
-                    show();
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(1)));
+                    let mut line = String::new();
+                    let _ = std::io::BufReader::new(stream.take(128)).read_line(&mut line);
+                    if is_knock(&line, &self.token) {
+                        show();
+                    }
                 }
             })
             .expect("spawning a thread");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn knocks_need_the_token_from_the_port_file() {
+        let (port, token) = parse_port_file("50123 0a1b2c\r\n").unwrap();
+        assert_eq!(port, 50123);
+        assert!(is_knock(&knock_line(&token), &token));
+        assert!(!is_knock("show\n", &token));
+        assert!(!is_knock("show 0a1b2d\n", &token));
+        // An old-style file without a token isn't trusted.
+        assert_eq!(parse_port_file("50123"), None);
+        assert_eq!(parse_port_file("x 0a1b2c"), None);
     }
 }

@@ -47,9 +47,13 @@ impl Controller {
     /// Opens the account dialog: to sign in (or create an account), or with a `purpose` to
     /// confirm an action with the password of the account this device is signed in to.
     pub(super) fn open_account_dialog(&self, create: bool, purpose: &str) {
-        let username = self.0.state.lock().unwrap().creds.as_ref().and_then(|c| c.username().map(str::to_owned));
+        let (username, required) = {
+            let st = self.0.state.lock().unwrap();
+            (st.creds.as_ref().and_then(|c| c.username().map(str::to_owned)), st.setup_pending.is_some())
+        };
         let purpose = purpose.to_owned();
         self.ui(move |ui| {
+            ui.set_account_required(required);
             if let Some(u) = username.filter(|_| !purpose.is_empty()) {
                 ui.set_account_username(u.into());
             }
@@ -313,6 +317,8 @@ impl Controller {
             let mut st = self.0.state.lock().unwrap();
             st.login = None;
             st.account_totp = false;
+            // Turned on for this account; another one has to be turned on for itself.
+            st.settings.own_devices_access = false;
             st.orgs.clear();
             st.org_admins.clear();
             st.org_selected = None;
@@ -320,7 +326,10 @@ impl Controller {
                 book.clear_passwords();
                 let _ = book.save();
             }
+            // A sync still running must not bring the passwords back.
+            st.book_generation += 1;
         }
+        self.save_settings();
         self.save_creds();
         self.publish_identity();
         self.publish_book();
@@ -328,6 +337,7 @@ impl Controller {
         self.ui(|ui| {
             ui.set_devices(ModelRc::default());
             ui.set_account_2fa(false);
+            ui.set_own_devices(false);
             if ui.get_home_view() == crate::HomeView::Devices || ui.get_home_view() == crate::HomeView::Orgs {
                 ui.set_home_view(crate::HomeView::Connect);
             }

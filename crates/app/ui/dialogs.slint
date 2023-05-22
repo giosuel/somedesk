@@ -61,6 +61,9 @@ export component IncomingDialog inherits Backdrop {
     in property <TrustLevel> trust;
     /// Extra guidance, e.g. about the desktop's own permission dialog on Wayland.
     in property <string> note;
+    /// Accept works a moment after the dialog appears, so a click meant for something else
+    /// doesn't accept.
+    in property <bool> ready;
     callback answer(bool);
     Sheet {
         sheet-width: Math.min(480px, root.width - 32px);
@@ -135,11 +138,12 @@ export component IncomingDialog inherits Backdrop {
             spacing: 10px;
             alignment: end;
             GhostButton { button-height: 42px; text: "Decline"; clicked => { root.answer(false); } }
-            if root.trust != TrustLevel.changed: PrimaryButton { height: 42px; text: "Accept"; clicked => { root.answer(true); } }
+            if root.trust != TrustLevel.changed: PrimaryButton { height: 42px; text: "Accept"; enabled: root.ready; clicked => { root.answer(true); } }
             if root.trust == TrustLevel.changed: GhostButton {
                 button-height: 42px;
                 text: "Accept anyway";
                 fg: Theme.danger-text;
+                enabled: root.ready;
                 clicked => { root.answer(true); }
             }
         }
@@ -529,6 +533,7 @@ export component AccountDialog inherits Backdrop {
     in-out property <string> code;
     in property <bool> need-invite;
     in-out property <string> invite;
+    in property <bool> account-required;
     in property <string> purpose;
     callback submit();
     callback close();
@@ -551,6 +556,7 @@ export component AccountDialog inherits Backdrop {
             code <=> root.code;
             need-invite: root.need-invite;
             invite <=> root.invite;
+            account-required: root.account-required;
             purpose: root.purpose;
             submit => { root.submit(); }
         }
@@ -597,6 +603,8 @@ export component PasswordConnectDialog inherits Backdrop {
     in property <bool> busy;
     callback submit();
     callback cancel();
+    /// Type a password instead of the saved one (which may be out of date).
+    callback use-other();
     Sheet {
         sheet-width: Math.min(440px, root.width - 32px);
         HorizontalLayout {
@@ -636,6 +644,12 @@ export component PasswordConnectDialog inherits Backdrop {
             text <=> root.code;
             enabled: !root.busy;
             accepted => { root.submit(); }
+        }
+        if root.password-saved: HorizontalLayout {
+            alignment: start;
+            spacing: 5px;
+            Text { text: "Using the saved password."; color: Theme.muted; font-size: 13px; }
+            LinkText { text: "Enter a different one"; clicked => { root.use-other(); } }
         }
         if !root.password-saved: SaveChoice { save <=> root.save; keychain: root.keychain; signed-in: root.signed-in; }
         if root.error != "": ErrorBox { text: root.error; }

@@ -6008,6 +6008,7 @@ dependencies = [
  "dirs",
  "hex",
  "qrcode",
+ "rand 0.8.8",
  "rfd",
  "serde",
  "serde_json",
@@ -6021,6 +6022,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
  "winresource",
 ]
 
