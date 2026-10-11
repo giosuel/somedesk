@@ -1,0 +1,146 @@
+name: Release
+
+# Pushing a tag like v0.2.0 builds every package and publishes them as a GitHub release, and the
+# server image to ghcr.io. The tag must match the workspace version in Cargo.toml.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        name: Tag matches Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config clang libfontconfig1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev
+      - run: cargo install cargo-deb --locked
+      - run: cargo build --release --locked -p somedesk-server -p somedesk-app
+      - run: cargo deb --no-build -p somedesk-server && cargo deb --no-build -p somedesk-app
+      - name: Binary archive
+        run: |
+          name="SomeDesk-${{ needs.version.outputs.version }}-linux-x64"
+          mkdir -p "dist/$name"
+          cp target/release/somedesk target/release/somedesk-server README.md LICENSE "dist/$name/"
+          strip "dist/$name/somedesk" "dist/$name/somedesk-server"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          cp target/debian/*.deb dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p somedesk-app
+      - name: Zip
+        shell: pwsh
+        run: |
+          $name = "SomeDesk-${{ needs.version.outputs.version }}-windows-x64"
+          New-Item -ItemType Directory -Path "dist/$name" | Out-Null
+          Copy-Item target/release/somedesk.exe, README.md, LICENSE "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: packaging/macos/make-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: target/dist/SomeDesk-*-macos.zip
+
+  image:
+    needs: version
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push the server image
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/somedesk-server"
+          docker build -f packaging/server/Dockerfile \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --label "org.opencontainers.image.licenses=AGPL-3.0-or-later" \
+            -t "$image:$VERSION" .
+          docker push "$image:$VERSION"
+          # Pre-releases (v1.2.0-rc.1) don't move `latest`.
+          if [[ "$VERSION" != *-* ]]; then
+            docker tag "$image:$VERSION" "$image:latest"
+            docker push "$image:latest"
+          fi
+
+  release:
+    needs: [version, linux, windows, macos, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          prerelease=""
+          [[ "$VERSION" == *-* ]] && prerelease="--prerelease"
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "SomeDesk $VERSION" --generate-notes $prerelease
