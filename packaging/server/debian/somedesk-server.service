@@ -1,0 +1,28 @@
+# Installed by the somedesk-server Debian package. Set DATABASE_URL in /etc/somedesk/server.env.
+[Unit]
+Description=SomeDesk server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=somedesk
+EnvironmentFile=/etc/somedesk/server.env
+Environment=SOMEDESK_DATA_DIR=/var/lib/somedesk SOMEDESK_LISTEN=0.0.0.0:21116
+StateDirectory=somedesk
+ExecStart=/usr/bin/somedesk-server
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

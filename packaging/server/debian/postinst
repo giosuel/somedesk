@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    if ! getent passwd somedesk >/dev/null; then
+        adduser --system --group --home /var/lib/somedesk --no-create-home somedesk >/dev/null
+    fi
+    chown root:somedesk /etc/somedesk/server.env
+    chmod 640 /etc/somedesk/server.env
+fi
+#DEBHELPER#

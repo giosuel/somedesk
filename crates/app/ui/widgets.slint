@@ -1,0 +1,396 @@
+import { Theme, Icons } from "theme.slint";
+
+/// A 24x24 stroke icon from `Icons`.
+export component Icon {
+    in property <string> d;
+    in property <brush> color: Theme.text;
+    in property <length> size: 20px;
+    in property <length> stroke: 2px;
+    width: size;
+    height: size;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        commands: root.d;
+        stroke: root.color;
+        stroke-width: root.stroke;
+        stroke-line-cap: round;
+        fill: transparent;
+    }
+}
+
+/// The SomeDesk mark: a screen with a pointer crossing its corner.
+export component Mark inherits Rectangle {
+    in property <length> size: 32px;
+    /// `true`: dark mark on the accent square; `false`: accent mark on a dark tile.
+    in property <bool> filled: true;
+    width: size;
+    height: size;
+    border-radius: size * 15 / 64;
+    background: root.filled ? Theme.accent : #0e0f12;
+    border-width: root.filled ? 0px : 1px;
+    border-color: Theme.border-strong;
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 64;
+        viewbox-height: 64;
+        commands: "M16 14h28a5 5 0 0 1 5 5v17a5 5 0 0 1-5 5h-28a5 5 0 0 1-5-5v-17a5 5 0 0 1 5-5z";
+        stroke: root.filled ? #0e0f12 : Theme.accent;
+        stroke-width: root.size * 4.2 / 64;
+        fill: transparent;
+    }
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 64;
+        viewbox-height: 64;
+        commands: "M33.5 29.5L33.5 53L39.4 47.3L43.6 56.2L48.3 54L44.1 45.2L52.2 45.2Z";
+        fill: root.filled ? #0e0f12 : Theme.accent;
+        stroke: root.filled ? Theme.accent : #0e0f12;
+        stroke-width: root.size * 2.6 / 64;
+    }
+}
+
+export component Logo inherits HorizontalLayout {
+    in property <length> mark-size: 30px;
+    in property <length> font-size: 17px;
+    spacing: 10px;
+    alignment: start;
+    Mark { y: (parent.height - self.height) / 2; size: root.mark-size; }
+    Text {
+        text: "SomeDesk";
+        font-size: root.font-size;
+        font-weight: 600;
+        letter-spacing: -0.2px;
+        color: Theme.text;
+        vertical-alignment: center;
+    }
+}
+
+/// Main action of a screen: accent fill (or red with `danger`).
+export component PrimaryButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <bool> busy: false;
+    in property <bool> danger: false;
+    callback clicked;
+    height: 44px;
+    min-width: content.preferred-width + 40px;
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+    border-radius: 11px;
+    background: !root.enabled ? Theme.raised
+        : root.danger ? (ta.has-hover ? Theme.danger-hover : Theme.danger)
+        : (ta.has-hover ? Theme.accent-hover : Theme.accent);
+    animate background { duration: 100ms; }
+    content := HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        if root.icon != "" && !root.busy: Icon {
+            y: (parent.height - self.height) / 2;
+            d: root.icon;
+            size: 16px;
+            color: label.color;
+        }
+        label := Text {
+            text: root.busy ? "Please wait…" : root.text;
+            color: !root.enabled ? Theme.faint : root.danger ? white : Theme.on-accent;
+            font-size: 14px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled && !root.busy;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Secondary action: raised surface with a hairline border. Without `text` it is a square
+/// icon button.
+export component GhostButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <length> button-height: 40px;
+    in property <color> fg: Theme.text;
+    callback clicked;
+    height: root.button-height;
+    min-width: root.text == "" ? root.button-height : content.preferred-width + 32px;
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    background: ta.pressed ? Theme.raised : ta.has-hover && root.enabled ? Theme.hover : Theme.raised;
+    opacity: root.enabled ? 1 : 0.45;
+    content := HorizontalLayout {
+        alignment: center;
+        spacing: 8px;
+        if root.icon != "": Icon {
+            y: (parent.height - self.height) / 2;
+            d: root.icon;
+            size: 16px;
+            color: root.fg;
+        }
+        if root.text != "": Text {
+            text: root.text;
+            color: root.fg;
+            font-size: 13px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// Text-only action in the accent colour.
+export component LinkText inherits Text {
+    callback clicked;
+    color: lta.has-hover ? Theme.accent-hover : Theme.accent;
+    font-size: 13px;
+    font-weight: 500;
+    lta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <bool> password: false;
+    in property <bool> enabled: true;
+    in property <length> field-height: 44px;
+    in property <length> font-size: 15px;
+    in property <string> font-family;
+    in-out property <string> text <=> input.text;
+    callback accepted;
+    callback edited(string);
+    public function focus-input() { input.focus(); }
+    spacing: 7px;
+    if root.label != "": Text {
+        text: root.label;
+        color: Theme.muted;
+        font-size: 13px;
+    }
+    Rectangle {
+        height: root.field-height;
+        border-radius: 11px;
+        background: Theme.input-bg;
+        border-width: 1px;
+        border-color: input.has-focus ? Theme.accent : focus-ta.has-hover ? #353a44 : Theme.border-strong;
+        animate border-color { duration: 120ms; }
+        focus-ta := TouchArea {
+            mouse-cursor: MouseCursor.text;
+            clicked => { input.focus(); }
+        }
+        Text {
+            x: 14px;
+            width: parent.width - 28px;
+            height: parent.height;
+            text: root.placeholder;
+            visible: input.text == "";
+            color: Theme.faint;
+            font-size: root.font-size;
+            font-family: root.font-family;
+            vertical-alignment: center;
+        }
+        input := TextInput {
+            x: 14px;
+            width: parent.width - 28px;
+            height: parent.height;
+            enabled: root.enabled;
+            single-line: true;
+            vertical-alignment: center;
+            color: Theme.text;
+            selection-background-color: #7dd3c055;
+            font-size: root.font-size;
+            font-family: root.font-family;
+            input-type: root.password ? InputType.password : InputType.text;
+            accepted => { root.accepted(); }
+            edited => { root.edited(self.text); }
+        }
+    }
+}
+
+export component Card inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius-lg;
+    border-width: 1px;
+    border-color: Theme.border;
+}
+
+/// A card heading: plain sentence case, muted.
+export component SectionTitle inherits Text {
+    color: Theme.muted;
+    font-size: 15px;
+    font-weight: 500;
+    vertical-alignment: center;
+}
+
+export component Pill inherits Rectangle {
+    in property <string> text;
+    in property <color> fg: Theme.success;
+    in property <color> bg: Theme.accent-soft;
+    in property <bool> dot: true;
+    height: 26px;
+    width: row.preferred-width + 20px;
+    border-radius: 13px;
+    background: root.bg;
+    row := HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        if root.dot: Rectangle {
+            y: (parent.height - 6px) / 2;
+            width: 6px;
+            height: 6px;
+            border-radius: 3px;
+            background: root.fg;
+        }
+        Text {
+            text: root.text;
+            color: root.fg;
+            font-size: 12px;
+            font-weight: 500;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component Switch inherits Rectangle {
+    in-out property <bool> checked;
+    callback toggled(bool);
+    width: 42px;
+    height: 24px;
+    border-radius: 12px;
+    background: root.checked ? Theme.accent : Theme.border-strong;
+    animate background { duration: 150ms; }
+    Rectangle {
+        x: root.checked ? parent.width - self.width - 3px : 3px;
+        y: 3px;
+        width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: root.checked ? Theme.bg : Theme.muted;
+        animate x { duration: 150ms; easing: ease-out; }
+    }
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}
+
+export component Avatar inherits Rectangle {
+    /// One or two letters shown in the circle.
+    in property <string> letter;
+    in property <length> size: 32px;
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    background: Theme.border-strong;
+    Text {
+        text: root.letter == "" ? "?" : root.letter;
+        color: Theme.text;
+        font-size: root.size * 0.42;
+        font-weight: 600;
+    }
+}
+
+/// Three pulsing dots.
+export component Spinner inherits HorizontalLayout {
+    property <float> t: Math.mod(animation-tick() / 1200ms, 1);
+    spacing: 6px;
+    alignment: center;
+    for i in 3: Rectangle {
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
+        background: Theme.accent;
+        opacity: 0.25 + 0.75 * Math.max(0, 1 - Math.abs(Math.mod(root.t * 3 - i + 3, 3) - 0.5) * 1.2);
+    }
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.border;
+}
+
+export component Checkbox inherits Rectangle {
+    in property <string> text;
+    in-out property <bool> checked;
+    min-height: row.min-height;
+    preferred-height: row.preferred-height;
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.checked = !root.checked; }
+    }
+    row := HorizontalLayout {
+        spacing: 10px;
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 5px;
+            background: root.checked ? Theme.accent : Theme.input-bg;
+            border-width: root.checked ? 0px : 1px;
+            border-color: ta.has-hover ? Theme.muted : #3a3f49;
+            animate background { duration: 120ms; }
+            if root.checked: Icon { d: Icons.check; color: Theme.on-accent; size: 14px; stroke: 2.6px; }
+        }
+        Text { text: root.text; color: Theme.text-2; font-size: 13px; vertical-alignment: center; wrap: word-wrap; }
+    }
+}
+
+/// An entry of the sidebar.
+export component NavItem inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> active;
+    in property <string> badge;
+    callback clicked;
+    height: 40px;
+    border-radius: 10px;
+    background: root.active ? Theme.raised : ta.has-hover ? #15171b : transparent;
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        Icon {
+            y: (parent.height - self.height) / 2;
+            d: root.icon;
+            size: 17px;
+            color: root.active ? Theme.accent : #a3a9b4;
+        }
+        Text {
+            text: root.text;
+            color: root.active ? Theme.text : #a3a9b4;
+            font-size: 14px;
+            font-weight: root.active ? 500 : 400;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        if root.badge != "": Text {
+            text: root.badge;
+            color: Theme.subtle;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

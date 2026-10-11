@@ -1,0 +1,272 @@
+import { Theme } from "theme.slint";
+import { LoginPage } from "login.slint";
+import { HomePage, DeviceItem, ContactItem, RecentItem } from "home.slint";
+import { SessionPage, MonitorChoice } from "session.slint";
+import { IncomingDialog, OutgoingDialog, RecoveryKeyDialog, Toast, TransfersPanel, TransferItem, FileOfferDialog, TrustLevel, IdentityChangedDialog } from "dialogs.slint";
+import { Logo, Spinner } from "widgets.slint";
+
+export { DeviceItem, TransferItem, ContactItem, TrustLevel, MonitorChoice, RecentItem }
+
+export enum Page { starting, login, home, session }
+
+export component AppWindow inherits Window {
+    title: "SomeDesk";
+    preferred-width: 1180px;
+    preferred-height: 760px;
+    min-width: 960px;
+    min-height: 640px;
+    default-font-family: "Geist";
+    icon: @image-url("../../../assets/brand/app-icon-256.png");
+    background: Theme.bg;
+
+    in-out property <Page> page: Page.starting;
+
+    // Login
+    in-out property <string> login-server;
+    in-out property <string> login-username;
+    in-out property <string> login-password;
+    in-out property <string> login-password2;
+    in-out property <string> login-device-name;
+    in-out property <bool> login-create-mode;
+    in-out property <bool> login-recover-mode;
+    in-out property <string> login-recovery-key;
+    in property <string> login-error;
+    in property <bool> login-busy;
+    callback login-submit();
+
+    // Home
+    in property <string> my-id;
+    in property <string> my-device-name;
+    in property <string> username;
+    in property <string> user-letter;
+    in property <string> fingerprint;
+    in property <string> server-label;
+    in property <bool> online;
+    in property <string> status-text;
+    in property <[DeviceItem]> devices;
+    in property <string> greeting;
+    in property <[RecentItem]> recents;
+    callback copy-id();
+    in property <[ContactItem]> contacts;
+    callback revoke-contact(string);
+    callback forget-contact(string);
+    in property <bool> connect-busy;
+    in-out property <string> connect-id;
+    in-out property <bool> auto-accept;
+    in-out property <bool> share-clipboard;
+    in-out property <bool> allow-direct;
+    callback allow-direct-changed(bool);
+    callback connect(string);
+    callback auto-accept-changed(bool);
+    callback share-clipboard-changed(bool);
+    callback sign-out();
+
+    // Hosting
+    in property <bool> hosting-active;
+    in property <string> hosting-peer;
+    callback stop-hosting();
+
+    // Incoming request
+    in property <bool> incoming-visible;
+    in property <string> incoming-user;
+    in property <string> incoming-user-letter;
+    in property <string> incoming-device;
+    in property <string> incoming-fingerprint;
+    in property <TrustLevel> incoming-trust;
+    in property <string> incoming-previous-fingerprint;
+    in-out property <bool> incoming-always-allow;
+    in property <string> incoming-note;
+    callback incoming-answer(bool);
+
+    // Outgoing request
+    in property <bool> outgoing-visible;
+    in property <string> outgoing-target;
+    callback outgoing-cancel();
+
+    // Session
+    in property <string> session-peer;
+    in property <string> session-peer-id;
+    in property <string> session-peer-letter;
+    in property <string> session-route: "Encrypted";
+    in property <string> session-peer-fingerprint;
+    in property <image> remote-frame;
+    in property <bool> has-frame;
+    in property <string> latency;
+    in property <string> fps;
+    in property <string> resolution;
+    in property <bool> session-view-only;
+    in property <[MonitorChoice]> session-monitors;
+    in property <int> session-monitor-selected: -1;
+    callback select-monitor(int);
+    callback disconnect();
+    callback pointer-moved(length, length, length, length);
+    callback pointer-button(int, bool);
+    callback scroll(length, length);
+    callback key(string, bool);
+
+    // Recovery key
+    in property <bool> recovery-key-visible;
+    in property <string> recovery-key;
+    in property <string> recovery-key-reason;
+    in property <bool> recovery-key-copied;
+    callback recovery-key-copy();
+    callback recovery-key-done();
+
+    // Files
+    in property <[TransferItem]> transfers;
+    in property <bool> file-offer-visible;
+    in property <string> file-offer-peer;
+    in property <string> file-offer-name;
+    in property <string> file-offer-size;
+    callback send-files();
+    callback cancel-transfer(int, bool);
+    callback clear-transfers();
+    callback file-offer-answer(bool);
+
+    // The host we are connecting to has a new identity
+    in property <bool> identity-changed-visible;
+    in property <string> identity-changed-user;
+    in property <string> identity-changed-fingerprint;
+    in property <string> identity-changed-previous;
+    callback identity-changed-answer(bool);
+
+    // Toast
+    in property <string> toast-text;
+    in property <bool> toast-error;
+
+    if root.page == Page.starting: Rectangle {
+        VerticalLayout {
+            alignment: center;
+            spacing: 24px;
+            HorizontalLayout { alignment: center; Logo { mark-size: 44px; font-size: 24px; } }
+            Spinner { }
+        }
+    }
+
+    if root.page == Page.login: LoginPage {
+        server <=> root.login-server;
+        username <=> root.login-username;
+        password <=> root.login-password;
+        password2 <=> root.login-password2;
+        device-name <=> root.login-device-name;
+        create-mode <=> root.login-create-mode;
+        recover-mode <=> root.login-recover-mode;
+        recovery-key <=> root.login-recovery-key;
+        error: root.login-error;
+        busy: root.login-busy;
+        submit => { root.login-submit(); }
+    }
+
+    if root.page == Page.home: HomePage {
+        my-id: root.my-id;
+        my-device-name: root.my-device-name;
+        username: root.username;
+        user-letter: root.user-letter;
+        fingerprint: root.fingerprint;
+        server-label: root.server-label;
+        online: root.online;
+        status-text: root.status-text;
+        devices: root.devices;
+        greeting: root.greeting;
+        recents: root.recents;
+        copy-id => { root.copy-id(); }
+        contacts: root.contacts;
+        revoke-contact(u) => { root.revoke-contact(u); }
+        forget-contact(u) => { root.forget-contact(u); }
+        connect-busy: root.connect-busy;
+        connect-id <=> root.connect-id;
+        auto-accept <=> root.auto-accept;
+        share-clipboard <=> root.share-clipboard;
+        allow-direct <=> root.allow-direct;
+        allow-direct-changed(v) => { root.allow-direct-changed(v); }
+        hosting-active: root.hosting-active;
+        hosting-peer: root.hosting-peer;
+        connect(id) => { root.connect(id); }
+        auto-accept-changed(v) => { root.auto-accept-changed(v); }
+        share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
+        sign-out => { root.sign-out(); }
+        stop-hosting => { root.stop-hosting(); }
+        send-files => { root.send-files(); }
+    }
+
+    if root.page == Page.session: SessionPage {
+        peer: root.session-peer;
+        peer-id: root.session-peer-id;
+        peer-letter: root.session-peer-letter;
+        route: root.session-route;
+        peer-fingerprint: root.session-peer-fingerprint;
+        frame: root.remote-frame;
+        has-frame: root.has-frame;
+        latency: root.latency;
+        fps: root.fps;
+        resolution: root.resolution;
+        view-only: root.session-view-only;
+        monitors: root.session-monitors;
+        monitor-selected: root.session-monitor-selected;
+        select-monitor(id) => { root.select-monitor(id); }
+        disconnect => { root.disconnect(); }
+        send-files => { root.send-files(); }
+        pointer-moved(x, y, w, h) => { root.pointer-moved(x, y, w, h); }
+        pointer-button(b, d) => { root.pointer-button(b, d); }
+        scroll(dx, dy) => { root.scroll(dx, dy); }
+        key(t, d) => { root.key(t, d); }
+    }
+
+    if root.outgoing-visible: OutgoingDialog {
+        target: root.outgoing-target;
+        cancel => { root.outgoing-cancel(); }
+    }
+
+
+    if root.transfers.length > 0 && (root.page == Page.session || root.page == Page.home): TransfersPanel {
+        x: parent.width - self.width - 20px;
+        y: parent.height - self.height - 20px;
+        items: root.transfers;
+        cancel(id, up) => { root.cancel-transfer(id, up); }
+        clear => { root.clear-transfers(); }
+    }
+
+    if root.file-offer-visible: FileOfferDialog {
+        peer: root.file-offer-peer;
+        name: root.file-offer-name;
+        size: root.file-offer-size;
+        answer(ok) => { root.file-offer-answer(ok); }
+    }
+
+    if root.identity-changed-visible: IdentityChangedDialog {
+        user: root.identity-changed-user;
+        fingerprint: root.identity-changed-fingerprint;
+        previous-fingerprint: root.identity-changed-previous;
+        answer(ok) => { root.identity-changed-answer(ok); }
+    }
+
+    if root.recovery-key-visible: RecoveryKeyDialog {
+        key: root.recovery-key;
+        reason: root.recovery-key-reason;
+        copied: root.recovery-key-copied;
+        copy => { root.recovery-key-copy(); }
+        done => { root.recovery-key-done(); }
+    }
+
+    // Above everything else: someone is waiting for an answer.
+    if root.incoming-visible: IncomingDialog {
+        user: root.incoming-user;
+        user-letter: root.incoming-user-letter;
+        device: root.incoming-device;
+        fingerprint: root.incoming-fingerprint;
+        trust: root.incoming-trust;
+        previous-fingerprint: root.incoming-previous-fingerprint;
+        always-allow <=> root.incoming-always-allow;
+        note: root.incoming-note;
+        answer(ok) => { root.incoming-answer(ok); }
+    }
+
+    if root.toast-text != "": Toast {
+        // Keep clear of the transfers panel in the bottom-right corner.
+        x: root.transfers.length > 0 ? Math.min((parent.width - self.width) / 2, parent.width - self.width - 380px)
+            : (parent.width - self.width) / 2;
+        y: parent.height - self.height - 24px;
+        text: root.toast-text;
+        error: root.toast-error;
+    }
+}

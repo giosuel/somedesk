@@ -1,0 +1,195 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon, PrimaryButton, GhostButton, Avatar, Spinner } from "widgets.slint";
+
+export struct MonitorChoice {
+    /// -1 for "all screens".
+    id: int,
+    label: string,
+}
+
+/// Segmented control to pick which of the host's monitors to show.
+component MonitorPicker inherits Rectangle {
+    in property <[MonitorChoice]> choices;
+    in property <int> selected;
+    callback pick(int);
+    height: 34px;
+    width: row.preferred-width;
+    border-radius: 10px;
+    background: Theme.input-bg;
+    border-width: 1px;
+    border-color: Theme.border;
+    row := HorizontalLayout {
+        padding: 3px;
+        spacing: 2px;
+        for c in root.choices: Rectangle {
+            width: label.preferred-width + 24px;
+            border-radius: 7px;
+            background: c.id == root.selected ? Theme.border-strong : ta.has-hover ? Theme.raised : transparent;
+            label := Text {
+                text: c.label;
+                color: c.id == root.selected ? Theme.text : Theme.muted;
+                font-size: 12px;
+                font-weight: c.id == root.selected ? 500 : 400;
+            }
+            ta := TouchArea { mouse-cursor: pointer; clicked => { root.pick(c.id); } }
+        }
+    }
+}
+
+component Stat inherits HorizontalLayout {
+    in property <string> value;
+    in property <string> unit;
+    spacing: 4px;
+    Text { text: root.value; color: Theme.text-2; font-size: 12px; font-family: Theme.mono; vertical-alignment: center; }
+    Text { text: root.unit; color: Theme.subtle; font-size: 12px; vertical-alignment: center; }
+}
+
+export component SessionPage inherits Rectangle {
+    in property <string> peer;
+    in property <string> peer-letter;
+    in property <string> peer-id;
+    in property <string> peer-fingerprint;
+    in property <image> frame;
+    in property <bool> has-frame;
+    in property <string> latency;
+    in property <string> fps;
+    in property <string> resolution;
+    in property <bool> view-only;
+    in property <string> route: "Encrypted";
+    in property <[MonitorChoice]> monitors;
+    in property <int> monitor-selected: -1;
+    callback select-monitor(int);
+    callback disconnect();
+    callback send-files();
+    callback pointer-moved(length, length, length, length);
+    callback pointer-button(int, bool);
+    callback scroll(length, length);
+    callback key(string, bool);
+    property <bool> compact: root.monitors.length > 2 && root.width < 1300px;
+    background: #0a0b0d;
+
+    VerticalLayout {
+        // Toolbar
+        Rectangle {
+            height: 56px;
+            background: #121418;
+            Rectangle { y: parent.height - 1px; height: 1px; background: #1f2228; }
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 14px;
+                spacing: 14px;
+                Avatar { y: (parent.height - self.height) / 2; letter: root.peer-letter; size: 32px; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text { text: root.peer; color: Theme.text; font-size: 14px; font-weight: 600; overflow: elide; }
+                    Text {
+                        text: root.peer-id + "  ·  " + root.peer-fingerprint;
+                        color: Theme.subtle;
+                        font-size: 11px;
+                        font-family: Theme.mono;
+                    }
+                }
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 26px;
+                    width: e2e.preferred-width + 20px;
+                    border-radius: 13px;
+                    background: Theme.accent-soft;
+                    e2e := HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        Icon { y: (parent.height - self.height) / 2; d: Icons.lock; size: 12px; color: Theme.accent; stroke: 2.4px; }
+                        Text { text: root.route; color: Theme.accent; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+                    }
+                }
+                if root.view-only: Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 26px;
+                    width: vo.preferred-width + 20px;
+                    border-radius: 13px;
+                    background: Theme.warning-soft;
+                    vo := HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        Icon { y: (parent.height - self.height) / 2; d: Icons.eye; size: 13px; color: Theme.warning; }
+                        Text { text: "View only"; color: Theme.warning; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if root.monitors.length > 2: MonitorPicker {
+                    y: (parent.height - self.height) / 2;
+                    choices: root.monitors;
+                    selected: root.monitor-selected;
+                    pick(id) => { root.select-monitor(id); }
+                }
+                Stat { value: root.latency; unit: ""; }
+                Stat { value: root.fps; unit: "fps"; }
+                if !root.compact: Stat { value: root.resolution; unit: ""; }
+                GhostButton {
+                    y: (parent.height - self.height) / 2;
+                    button-height: 36px;
+                    icon: Icons.upload;
+                    text: root.compact ? "" : "Send files";
+                    clicked => { root.send-files(); }
+                }
+                PrimaryButton {
+                    y: (parent.height - self.height) / 2;
+                    height: 36px;
+                    text: "End session";
+                    danger: true;
+                    clicked => { root.disconnect(); }
+                }
+            }
+        }
+
+        // Remote screen
+        Rectangle {
+            vertical-stretch: 1;
+            background: #0a0b0d;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.frame;
+                image-fit: contain;
+                image-rendering: smooth;
+            }
+            if !root.has-frame: VerticalLayout {
+                alignment: center;
+                spacing: 14px;
+                Spinner { }
+                Text { text: "Waiting for the remote screen…"; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+            }
+            keys := FocusScope {
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    root.key(e.text, true);
+                    accept
+                }
+                key-released(e) => {
+                    root.key(e.text, false);
+                    accept
+                }
+                TouchArea {
+                    mouse-cursor: default;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.move) {
+                            root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height);
+                        } else if (e.kind == PointerEventKind.down || e.kind == PointerEventKind.up) {
+                            keys.focus();
+                            root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height);
+                            root.pointer-button(
+                                e.button == PointerEventButton.left ? 1 : e.button == PointerEventButton.middle ? 2 : e.button == PointerEventButton.right ? 3 : 0,
+                                e.kind == PointerEventKind.down);
+                        }
+                    }
+                    moved => { root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height); }
+                    scroll-event(e) => {
+                        root.scroll(e.delta-x, e.delta-y);
+                        accept
+                    }
+                }
+            }
+        }
+    }
+}

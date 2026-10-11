@@ -1,0 +1,497 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon, PrimaryButton, GhostButton, Avatar, Spinner, Checkbox } from "widgets.slint";
+
+/// How the caller relates to what this computer remembers (see the trust store).
+export enum TrustLevel { new-peer, known, changed, own-account }
+
+component Backdrop inherits Rectangle {
+    background: Theme.scrim;
+    TouchArea { }
+}
+
+/// A dialog card, centred on its backdrop.
+component Sheet inherits Rectangle {
+    in property <length> sheet-width: 460px;
+    in property <color> outline: Theme.border-strong;
+    // Centred on the backdrop (Slint centres children without x/y).
+    width: root.sheet-width;
+    height: body.preferred-height;
+    border-radius: 18px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: root.outline;
+    drop-shadow-blur: 48px;
+    drop-shadow-color: #00000088;
+    drop-shadow-offset-y: 16px;
+    body := VerticalLayout {
+        padding: 26px;
+        spacing: 18px;
+        @children
+    }
+}
+
+/// A tinted note inside a dialog.
+component Note inherits Rectangle {
+    in property <string> text;
+    in property <string> icon: Icons.warning;
+    in property <color> fg: Theme.warning;
+    in property <color> text-color: Theme.warning-text;
+    in property <color> bg: Theme.warning-soft;
+    border-radius: 12px;
+    background: root.bg;
+    HorizontalLayout {
+        padding: 12px;
+        padding-left: 14px;
+        spacing: 10px;
+        Icon { y: 1px; d: root.icon; size: 16px; color: root.fg; }
+        Text { text: root.text; color: root.text-color; font-size: 13px; wrap: word-wrap; }
+    }
+}
+
+export component IncomingDialog inherits Backdrop {
+    in property <string> user;
+    in property <string> user-letter;
+    in property <string> device;
+    in property <string> fingerprint;
+    in property <string> previous-fingerprint;
+    in property <TrustLevel> trust;
+    in-out property <bool> always-allow;
+    /// Extra guidance, e.g. about the desktop's own permission dialog on Wayland.
+    in property <string> note;
+    callback answer(bool);
+    Sheet {
+        sheet-width: 480px;
+        outline: root.trust == TrustLevel.changed ? #5a2a2e : Theme.border-strong;
+        HorizontalLayout {
+            spacing: 14px;
+            Avatar { letter: root.user-letter; size: 48px; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.user + " wants to connect"; color: Theme.text; font-size: 19px; font-weight: 600; letter-spacing: -0.3px; }
+                Text { text: "from " + root.device; color: Theme.muted; font-size: 13px; }
+            }
+        }
+        Text {
+            text: "They will see your screen and can use your mouse and keyboard until you end the session.";
+            color: Theme.text-2;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            border-radius: 12px;
+            background: root.trust == TrustLevel.changed ? #1f1416 : Theme.input-bg;
+            border-width: 1px;
+            border-color: root.trust == TrustLevel.changed ? #5a2a2e : Theme.border;
+            VerticalLayout {
+                padding: 14px;
+                padding-left: 16px;
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    Icon {
+                        y: (parent.height - self.height) / 2;
+                        d: root.trust == TrustLevel.changed ? Icons.warning : root.trust == TrustLevel.new-peer ? Icons.fingerprint : Icons.check;
+                        size: 15px;
+                        color: root.trust == TrustLevel.changed ? Theme.danger-text : root.trust == TrustLevel.new-peer ? Theme.muted : Theme.accent;
+                    }
+                    Text {
+                        text: root.trust == TrustLevel.own-account ? "One of your own devices"
+                            : root.trust == TrustLevel.known ? "Known contact — you have connected before"
+                            : root.trust == TrustLevel.changed ? root.user + "'s identity has changed"
+                            : "First connection — compare this fingerprint with " + root.user;
+                        color: root.trust == TrustLevel.changed ? Theme.danger-text
+                            : root.trust == TrustLevel.new-peer ? Theme.muted : Theme.accent;
+                        font-size: 13px;
+                        font-weight: 500;
+                        wrap: word-wrap;
+                    }
+                }
+                Text { text: root.fingerprint; color: Theme.text-2; font-size: 14px; font-family: Theme.mono; }
+                if root.trust == TrustLevel.changed: Text {
+                    text: "Before: " + root.previous-fingerprint;
+                    color: Theme.subtle;
+                    font-size: 13px;
+                    font-family: Theme.mono;
+                }
+            }
+        }
+        if root.trust == TrustLevel.changed: Text {
+            text: "This happens after an account reset, but it is also what an impersonator would look like. Only accept after confirming the new fingerprint with them directly.";
+            color: Theme.danger-text;
+            font-size: 13px;
+            wrap: word-wrap;
+        }
+        if root.trust == TrustLevel.new-peer: Text {
+            text: "Only accept if you are expecting this connection.";
+            color: Theme.warning;
+            font-size: 13px;
+        }
+        if root.note != "": Note { text: root.note; }
+        if root.trust == TrustLevel.new-peer || root.trust == TrustLevel.known: Checkbox {
+            text: "Let " + root.device + " connect without asking next time";
+            checked <=> root.always-allow;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: end;
+            GhostButton { button-height: 42px; text: "Decline"; clicked => { root.answer(false); } }
+            if root.trust != TrustLevel.changed: PrimaryButton { height: 42px; text: "Accept"; clicked => { root.answer(true); } }
+            if root.trust == TrustLevel.changed: GhostButton {
+                button-height: 42px;
+                text: "Accept anyway";
+                fg: Theme.danger-text;
+                clicked => { root.answer(true); }
+            }
+        }
+    }
+}
+
+export component OutgoingDialog inherits Backdrop {
+    in property <string> target;
+    callback cancel();
+    Sheet {
+        sheet-width: 400px;
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 56px;
+                height: 56px;
+                border-radius: 16px;
+                background: Theme.accent-soft;
+                Icon { d: Icons.monitor; size: 26px; color: Theme.accent; }
+            }
+        }
+        VerticalLayout {
+            spacing: 6px;
+            Text { text: "Connecting to " + root.target; color: Theme.text; font-size: 17px; font-weight: 600; horizontal-alignment: center; }
+            Text {
+                text: "Waiting for someone at the other computer to accept…";
+                color: Theme.muted;
+                font-size: 13px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        Spinner { }
+        HorizontalLayout {
+            alignment: center;
+            GhostButton { text: "Cancel"; clicked => { root.cancel(); } }
+        }
+    }
+}
+
+export component Toast inherits Rectangle {
+    in property <string> text;
+    in property <bool> error;
+    height: 44px;
+    width: row.preferred-width + 32px;
+    border-radius: 12px;
+    background: Theme.raised;
+    border-width: 1px;
+    border-color: root.error ? #5a2a2e : Theme.border-strong;
+    drop-shadow-blur: 24px;
+    drop-shadow-color: #00000080;
+    drop-shadow-offset-y: 8px;
+    row := HorizontalLayout {
+        alignment: center;
+        spacing: 10px;
+        Rectangle {
+            y: (parent.height - 8px) / 2;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.error ? Theme.danger : Theme.accent;
+        }
+        Text { text: root.text; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+    }
+}
+
+/// Shown once whenever a new recovery key is created. The user must confirm they stored it.
+export component RecoveryKeyDialog inherits Backdrop {
+    /// The key, as three lines of `XXXX-XXXX-XXXX`.
+    in property <string> key;
+    /// Why this key is being shown (new account, replaced after a reset, ...).
+    in property <string> reason;
+    in property <bool> copied;
+    callback copy();
+    callback done();
+    property <bool> saved;
+    Sheet {
+        sheet-width: 480px;
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 14px;
+                background: Theme.warning-soft;
+                Icon { d: Icons.key; size: 22px; color: Theme.warning; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: "Save your recovery key"; color: Theme.text; font-size: 19px; font-weight: 600; letter-spacing: -0.3px; }
+                Text { text: root.reason; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+            }
+        }
+        Text {
+            text: "If you forget your password, this key is the only way back into your account. Nobody can reset it for you — not even the server's administrator.";
+            color: Theme.text-2;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            border-radius: 12px;
+            background: Theme.input-bg;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            VerticalLayout {
+                padding: 18px;
+                spacing: 14px;
+                Text {
+                    text: root.key;
+                    color: Theme.text;
+                    font-size: 21px;
+                    font-family: Theme.mono;
+                    letter-spacing: 1px;
+                    horizontal-alignment: center;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    GhostButton {
+                        text: root.copied ? "Copied" : "Copy to clipboard";
+                        icon: root.copied ? Icons.check : Icons.copy;
+                        button-height: 34px;
+                        clicked => { root.copy(); }
+                    }
+                }
+            }
+        }
+        Text {
+            text: "Store it in a password manager or print it, and keep it away from this computer.";
+            color: Theme.subtle;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        Checkbox { text: "I have stored my recovery key somewhere safe"; checked <=> root.saved; }
+        HorizontalLayout {
+            alignment: end;
+            PrimaryButton {
+                text: "Continue";
+                enabled: root.saved;
+                clicked => { if (root.saved) { root.done(); } }
+            }
+        }
+    }
+}
+
+export struct TransferItem {
+    id: int,
+    upload: bool,
+    name: string,
+    detail: string,
+    /// 0..1
+    progress: float,
+    /// 0 waiting for the other side, 1 running, 2 done, 3 failed
+    state: int,
+}
+
+/// Floating list of file transfers in this session.
+export component TransfersPanel inherits Rectangle {
+    in property <[TransferItem]> items;
+    callback cancel(int, bool);
+    callback clear();
+    width: 330px;
+    height: body.preferred-height;
+    border-radius: 14px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    drop-shadow-blur: 32px;
+    drop-shadow-color: #00000090;
+    drop-shadow-offset-y: 12px;
+    body := VerticalLayout {
+        HorizontalLayout {
+            padding: 12px;
+            padding-left: 16px;
+            padding-right: 16px;
+            Text { text: "Transfers"; color: Theme.text; font-size: 14px; font-weight: 600; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: "Clear";
+                color: clear-ta.has-hover ? Theme.accent-hover : Theme.accent;
+                font-size: 12px;
+                vertical-alignment: center;
+                clear-ta := TouchArea { mouse-cursor: pointer; clicked => { root.clear(); } }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        VerticalLayout {
+            padding: 8px;
+            padding-left: 16px;
+            padding-right: 12px;
+            for item in root.items: VerticalLayout {
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        width: 30px;
+                        height: 30px;
+                        border-radius: 8px;
+                        background: item.state == 3 ? Theme.danger-soft : item.state == 2 ? #1f2228 : Theme.accent-soft;
+                        Icon {
+                            d: item.state == 2 ? Icons.check : item.state == 3 ? Icons.x : item.upload ? Icons.upload : Icons.download;
+                            size: 14px;
+                            stroke: 2.2px;
+                            color: item.state == 3 ? Theme.danger-text : item.state == 2 ? Theme.text-2 : Theme.accent;
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        Text { text: item.name; color: Theme.text; font-size: 13px; font-weight: 500; overflow: elide; }
+                        Text { text: item.detail; color: item.state == 3 ? Theme.danger-text : Theme.subtle; font-size: 12px; overflow: elide; }
+                    }
+                    if item.state <= 1: Rectangle {
+                        y: (parent.height - self.height) / 2;
+                        width: 26px;
+                        height: 26px;
+                        border-radius: 7px;
+                        background: x-ta.has-hover ? Theme.raised : transparent;
+                        Icon { d: Icons.x; size: 13px; color: Theme.subtle; }
+                        x-ta := TouchArea { mouse-cursor: pointer; clicked => { root.cancel(item.id, item.upload); } }
+                    }
+                }
+                if item.state <= 1: Rectangle {
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.border-strong;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * Math.max(0.02, item.progress);
+                        height: parent.height;
+                        border-radius: 2px;
+                        background: Theme.accent;
+                        animate width { duration: 150ms; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The other computer wants to send us a file.
+export component FileOfferDialog inherits Backdrop {
+    in property <string> peer;
+    in property <string> name;
+    in property <string> size;
+    callback answer(bool);
+    Sheet {
+        sheet-width: 420px;
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 46px;
+                height: 46px;
+                border-radius: 13px;
+                background: Theme.accent-soft;
+                Icon { d: Icons.download; size: 21px; color: Theme.accent; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: "Receive a file?"; color: Theme.text; font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+                Text { text: root.peer + " wants to send you a file"; color: Theme.muted; font-size: 13px; }
+            }
+        }
+        Rectangle {
+            border-radius: 12px;
+            background: Theme.input-bg;
+            border-width: 1px;
+            border-color: Theme.border;
+            HorizontalLayout {
+                padding: 12px;
+                spacing: 12px;
+                Icon { y: (parent.height - self.height) / 2; d: Icons.file; size: 18px; color: Theme.muted; }
+                VerticalLayout {
+                    spacing: 2px;
+                    Text { text: root.name; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+                    Text { text: root.size; color: Theme.subtle; font-size: 12px; }
+                }
+            }
+        }
+        Text {
+            text: "Only accept files you expect. They are saved to Downloads/SomeDesk.";
+            color: Theme.subtle;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: end;
+            GhostButton { button-height: 42px; text: "Decline"; clicked => { root.answer(false); } }
+            PrimaryButton { height: 42px; text: "Save"; clicked => { root.answer(true); } }
+        }
+    }
+}
+
+/// The computer we are connecting to presents a different identity than last time.
+export component IdentityChangedDialog inherits Backdrop {
+    in property <string> user;
+    in property <string> fingerprint;
+    in property <string> previous-fingerprint;
+    callback answer(bool);
+    Sheet {
+        sheet-width: 460px;
+        outline: #5a2a2e;
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 14px;
+                background: Theme.danger-soft;
+                Icon { d: Icons.shield; size: 22px; color: Theme.danger-text; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.user + "'s identity has changed"; color: Theme.danger-text; font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+                Text { text: "The connection was stopped to protect you."; color: Theme.muted; font-size: 13px; }
+            }
+        }
+        Text {
+            text: "That happens after an account reset, but it is also what an attacker in the middle would look like.";
+            color: Theme.text-2;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        Rectangle {
+            border-radius: 12px;
+            background: #1f1416;
+            VerticalLayout {
+                padding: 12px;
+                padding-left: 14px;
+                spacing: 6px;
+                Text { text: "Now      " + root.fingerprint; color: #f2c9cb; font-size: 13px; font-family: Theme.mono; }
+                Text { text: "Before   " + root.previous-fingerprint; color: Theme.subtle; font-size: 13px; font-family: Theme.mono; }
+            }
+        }
+        Text {
+            text: "Ask " + root.user + " for the fingerprint shown in their SomeDesk, through another channel. Only trust the new identity if it matches.";
+            color: Theme.subtle;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: end;
+            GhostButton { button-height: 42px; text: "Trust new identity"; fg: Theme.danger-text; clicked => { root.answer(true); } }
+            PrimaryButton { height: 42px; text: "Cancel"; clicked => { root.answer(false); } }
+        }
+    }
+}

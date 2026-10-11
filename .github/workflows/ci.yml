@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug builds of the crypto and video crates are optimized anyway (see Cargo.toml).
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config clang libfontconfig1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test-linux:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      SOMEDESK_TEST_DATABASE_URL: postgres://postgres:postgres@localhost/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config clang libfontconfig1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev \
+            xvfb x11-utils x11-xserver-utils xsel postgresql-client
+      # Unit tests, X11 backend tests on Xvfb, server and end-to-end tests. (The Wayland test runs
+      # only where GNOME is installed; it is skipped here.)
+      - run: scripts/test.sh
+      # Real Linux NATs in network namespaces: direct connection vs. relay fallback.
+      - run: scripts/nat-test.sh
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests (without database or display)
+        run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
+      - run: cargo build --release -p somedesk-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: somedesk-windows
+          path: target/release/somedesk.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests (without database or display)
+        run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
+      - run: packaging/macos/make-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: somedesk-macos
+          path: target/dist/SomeDesk-*-macos.zip
+
+  packages:
+    runs-on: ubuntu-24.04
+    needs: [lint, test-linux]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config clang libfontconfig1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev
+      - run: cargo install cargo-deb --locked
+      - run: cargo deb -p somedesk-server && cargo deb -p somedesk-app
+      - run: docker build -f packaging/server/Dockerfile -t somedesk-server .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: somedesk-debs
+          path: target/debian/*.deb
