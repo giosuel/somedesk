@@ -30,6 +30,7 @@ target/release/somedesk --server your.server.example
 | Server + PostgreSQL | `SOMEDESK_DB_PASSWORD=… podman compose -f packaging/server/compose.yaml up -d` | two containers |
 | Server on a host | `cargo deb -p somedesk-server` (systemd unit, `somedesk` user, `/etc/somedesk/server.env`) or `packaging/server/somedesk-server.service` | `.deb` |
 | Linux client | `cargo deb -p somedesk-app` (desktop entry, icons) | `.deb` |
+| Linux client, any distribution | `packaging/linux/build-appimage.sh` (bundles its libraries except glibc, graphics and PipeWire; build on an old distribution such as Debian 12) | `.AppImage` |
 | Windows client | `packaging/windows/build-zip.sh` (cross-built with MinGW; icon embedded) | `.zip` with `somedesk.exe` and runtime DLLs |
 | macOS client | `packaging/macos/make-app.sh` on a Mac (unsigned) | `SomeDesk.app` + `.zip` |
 
