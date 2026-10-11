@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="t d">
+  <title id="t">SomeDesk session</title>
+  <desc id="d">A viewer controls a host over an end-to-end encrypted tunnel. Screen frames flow to the viewer, input flows to the host, and the server only sees ciphertext.</desc>
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#b4f5e4"/>
+      <stop offset=".5" stop-color="#7dd3c0"/>
+      <stop offset="1" stop-color="#3fa2c4"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#191c22"/>
+      <stop offset="1" stop-color="#111317"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-200%" width="140%" height="500%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+    <!-- A tiny SomeDesk window: sidebar, cards and a terminal (its text is drawn per screen, below). -->
+    <symbol id="desk" viewBox="0 0 260 160">
+      <rect width="260" height="160" rx="8" fill="#0e0f12"/>
+      <rect x="0" y="0" width="58" height="160" rx="8" fill="#14161b"/>
+      <rect x="10" y="12" width="14" height="14" rx="4" fill="url(#accent)"/>
+      <rect x="10" y="36" width="38" height="6" rx="3" fill="#2a2e36"/>
+      <rect x="10" y="48" width="30" height="6" rx="3" fill="#22252c"/>
+      <rect x="10" y="60" width="34" height="6" rx="3" fill="#22252c"/>
+      <rect x="70" y="14" width="96" height="9" rx="4.5" fill="#d9dde3" fill-opacity=".85"/>
+      <rect x="70" y="30" width="140" height="5" rx="2.5" fill="#3a3f48"/>
+      <rect x="70" y="44" width="80" height="34" rx="6" fill="#16181d" stroke="#262a31"/>
+      <rect x="78" y="54" width="48" height="8" rx="3" fill="#7dd3c0" fill-opacity=".8"/>
+      <rect x="158" y="44" width="92" height="34" rx="6" fill="#16181d" stroke="#262a31"/>
+      <rect x="196" y="56" width="44" height="12" rx="4" fill="#7dd3c0"/>
+      <rect x="70" y="88" width="180" height="62" rx="6" fill="#090a0c" stroke="#262a31"/>
+      <rect x="78" y="97" width="6" height="6" rx="1.5" fill="#7dd3c0"/>
+    </symbol>
+    <symbol id="pointer" viewBox="0 0 16 22">
+      <path d="M1 1v17l4.6-4.2 3.2 6.9 3.3-1.5-3.1-6.8h6.4z" fill="url(#accent)" stroke="#0d0e11" stroke-width="1.6" stroke-linejoin="round"/>
+    </symbol>
+  </defs>
+
+  <style>
+    text { font-family: Geist, Inter, "Segoe UI", system-ui, sans-serif; }
+    .mono { font-family: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+    .packet { offset-rotate: 0deg; animation: travel 2.4s linear infinite; }
+    .frame { offset-path: path("M612 150 L348 150"); }
+    .input { offset-path: path("M348 176 L612 176"); }
+    .p2 { animation-delay: .8s; } .p3 { animation-delay: 1.6s; }
+    @keyframes travel {
+      0% { offset-distance: 0%; opacity: 0; }
+      12% { opacity: 1; } 88% { opacity: 1; }
+      100% { offset-distance: 100%; opacity: 0; }
+    }
+    .presence { stroke-dasharray: 5 7; animation: dash 1.6s linear infinite; }
+    @keyframes dash { to { stroke-dashoffset: -24; } }
+    .tunnel-glow { animation: breathe 3s ease-in-out infinite; }
+    @keyframes breathe { 50% { opacity: .35; } }
+    /* Remote control: alice's pointer clicks into the terminal, bob's follows, text appears. */
+    .cursor { animation: point 8s ease-in-out infinite; }
+    .cursor.remote { animation-delay: .25s; }
+    @keyframes point {
+      0%, 8% { transform: translate(150px, 40px); }
+      30%, 100% { transform: translate(218px, 124px); }
+    }
+    .click { transform-box: fill-box; transform-origin: center; opacity: 0; animation: click 8s ease-out infinite; }
+    .click.remote { animation-delay: .25s; }
+    @keyframes click {
+      0%, 30% { opacity: 0; transform: scale(.4); }
+      32% { opacity: .9; }
+      40%, 100% { opacity: 0; transform: scale(1.6); }
+    }
+    .typed { transform-box: fill-box; transform-origin: left center; transform: scaleX(0); animation: type 8s steps(14, end) infinite; }
+    .t1 { animation-name: type1; } .t2 { animation-name: type2; } .t3 { animation-name: type3; }
+    @keyframes type1 { 0%, 36% { transform: scaleX(0); } 50%, 96% { transform: scaleX(1); } 100% { transform: scaleX(0); } }
+    @keyframes type2 { 0%, 52% { transform: scaleX(0); } 60%, 96% { transform: scaleX(1); } 100% { transform: scaleX(0); } }
+    @keyframes type3 { 0%, 62% { transform: scaleX(0); } 74%, 96% { transform: scaleX(1); } 100% { transform: scaleX(0); } }
+    .caret { animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) {
+      .packet, .presence, .tunnel-glow, .cursor, .click, .caret { animation: none; }
+      .packet, .click { opacity: 0; }
+      .typed { animation: none; transform: scaleX(1); }
+      .cursor { transform: translate(218px, 124px); }
+    }
+  </style>
+
+  <!-- The server: accounts, presence and a relay that only ever sees ciphertext. -->
+  <path class="presence" d="M200 268 C200 330 300 352 392 352" fill="none" stroke="#3a4049" stroke-width="2"/>
+  <path class="presence" d="M770 290 C770 336 660 352 568 352" fill="none" stroke="#3a4049" stroke-width="2"/>
+  <rect x="392" y="330" width="176" height="44" rx="12" fill="#14161b" stroke="#2a2e36"/>
+  <g transform="translate(408 341)" fill="none" stroke="#8a919c" stroke-width="1.8" stroke-linecap="round">
+    <rect x="0" y="1" width="20" height="8" rx="2"/><rect x="0" y="13" width="20" height="8" rx="2"/>
+    <path d="M4 5h.01M4 17h.01"/>
+  </g>
+  <text x="440" y="350" font-size="14" font-weight="600" fill="#d9dde3">Your server</text>
+  <text x="440" y="366" font-size="11.5" fill="#8a919c">sees ciphertext only</text>
+
+  <!-- The encrypted tunnel between the two computers. -->
+  <rect class="tunnel-glow" x="350" y="156" width="260" height="14" rx="7" fill="url(#accent)" opacity=".55" filter="url(#glow)"/>
+  <rect x="348" y="140" width="264" height="46" rx="23" fill="#0f1114" stroke="url(#accent)" stroke-width="1.5" stroke-opacity=".7"/>
+  <rect class="packet frame" x="-11" y="-4" width="22" height="8" rx="4" fill="#b4f5e4"/>
+  <rect class="packet frame p2" x="-11" y="-4" width="22" height="8" rx="4" fill="#b4f5e4"/>
+  <rect class="packet frame p3" x="-11" y="-4" width="22" height="8" rx="4" fill="#b4f5e4"/>
+  <rect class="packet input" x="-5" y="-4" width="10" height="8" rx="4" fill="#3fa2c4"/>
+  <rect class="packet input p3" x="-5" y="-4" width="10" height="8" rx="4" fill="#3fa2c4"/>
+  <rect x="422" y="104" width="116" height="26" rx="13" fill="#14161b" stroke="#2a2e36"/>
+  <g transform="translate(434 110)" fill="none" stroke="#7dd3c0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3.5 6V4.5a3.5 3.5 0 0 1 7 0V6"/><rect x="1.5" y="6" width="11" height="8.5" rx="2"/>
+  </g>
+  <text x="454" y="121.5" font-size="12" font-weight="600" fill="#d9dde3">Noise · E2E</text>
+  <text x="480" y="210" font-size="11.5" fill="#8a919c" text-anchor="middle">direct or relayed</text>
+
+  <!-- alice's laptop: the viewer. -->
+  <rect x="58" y="66" width="284" height="196" rx="14" fill="#16181d" stroke="#2a2e36"/>
+  <rect x="70" y="78" width="260" height="172" rx="8" fill="url(#screen)"/>
+  <use href="#desk" x="70" y="84" width="260" height="160"/>
+  <g transform="translate(70 84)">
+    <rect class="typed t1" x="88" y="97" width="120" height="6" rx="3" fill="#d9dde3" fill-opacity=".8"/>
+    <rect class="typed t2" x="78" y="110" width="88" height="6" rx="3" fill="#7dd3c0" fill-opacity=".7"/>
+    <rect class="typed t3" x="78" y="123" width="134" height="6" rx="3" fill="#8a919c" fill-opacity=".7"/>
+    <rect class="caret" x="78" y="136" width="5" height="7" rx="1" fill="#d9dde3"/>
+  </g>
+  <g class="cursor"><g transform="translate(70 84)"><use href="#pointer" width="14" height="19"/></g></g>
+  <circle class="click" cx="291" cy="211" r="10" fill="none" stroke="#7dd3c0" stroke-width="2"/>
+  <path d="M30 262h340l-16 16H46z" fill="#1d2027" stroke="#2a2e36"/>
+  <text x="200" y="306" font-size="13" fill="#8a919c" text-anchor="middle"><tspan fill="#d9dde3" font-weight="600">alice</tspan> · viewer</text>
+
+  <!-- bob's monitor: the host. -->
+  <rect x="618" y="56" width="304" height="212" rx="14" fill="#16181d" stroke="#2a2e36"/>
+  <rect x="630" y="68" width="280" height="188" rx="8" fill="url(#screen)"/>
+  <use href="#desk" x="640" y="82" width="260" height="160"/>
+  <g transform="translate(640 82)">
+    <rect class="typed t1" x="88" y="97" width="120" height="6" rx="3" fill="#d9dde3" fill-opacity=".8"/>
+    <rect class="typed t2" x="78" y="110" width="88" height="6" rx="3" fill="#7dd3c0" fill-opacity=".7"/>
+    <rect class="typed t3" x="78" y="123" width="134" height="6" rx="3" fill="#8a919c" fill-opacity=".7"/>
+    <rect class="caret" x="78" y="136" width="5" height="7" rx="1" fill="#d9dde3"/>
+  </g>
+  <g class="cursor remote"><g transform="translate(640 82)"><use href="#pointer" width="14" height="19"/></g></g>
+  <circle class="click remote" cx="861" cy="209" r="10" fill="none" stroke="#7dd3c0" stroke-width="2"/>
+  <rect x="752" y="268" width="36" height="20" fill="#1d2027"/>
+  <rect x="718" y="286" width="104" height="8" rx="4" fill="#1d2027" stroke="#2a2e36"/>
+  <text x="770" y="318" font-size="13" fill="#8a919c" text-anchor="middle"><tspan fill="#d9dde3" font-weight="600">bob</tspan> · host</text>
+</svg>

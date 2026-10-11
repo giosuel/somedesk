@@ -4,7 +4,7 @@
 The mark is a viewfinder whose two corners form an S, a dot for each of the two connected
 computers, and the pointer of the one in control.
 
-Writes mark.svg (= app-icon.svg), logo.svg (mark and wordmark, the text converted to outlines
+Writes mark.svg (= app-icon.svg, and docs/assets/mark.svg for the website), logo.svg (mark and wordmark, the text converted to outlines
 so it renders without Geist installed), logo-light.svg (the same for light backgrounds), the PNG
 sizes and app-icon.ico.
 
@@ -74,6 +74,8 @@ def main() -> None:
     mark = svg(512, 512, 64, MARK)
     (OUT / "mark.svg").write_text(mark)
     (OUT / "app-icon.svg").write_text(mark)
+    # The documentation site's logo and favicon (MkDocs only serves files inside docs/).
+    (ROOT / "docs" / "assets" / "mark.svg").write_text(mark)
 
     words, right = text_path("SomeDesk", 34, 80, 43.5, -0.8)
     width = right + 4
