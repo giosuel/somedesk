@@ -21,36 +21,46 @@ export component Icon {
     }
 }
 
-/// The SomeDesk mark: a screen with a pointer crossing its corner.
+/// The SomeDesk mark: a viewfinder whose corners form an S, a dot for each of the two connected
+/// computers, and the pointer of the one in control. Drawn from the same paths as
+/// assets/brand/mark.svg (scripts/gen-brand.py).
 export component Mark inherits Rectangle {
     in property <length> size: 32px;
-    /// `true`: dark mark on the accent square; `false`: accent mark on a dark tile.
-    in property <bool> filled: true;
+    property <brush> gradient: @linear-gradient(135deg, #b4f5e4 0%, #7dd3c0 50%, #3fa2c4 100%);
     width: size;
     height: size;
     border-radius: size * 15 / 64;
-    background: root.filled ? Theme.accent : #0e0f12;
-    border-width: root.filled ? 0px : 1px;
-    border-color: Theme.border-strong;
-    Path {
+    background: @linear-gradient(180deg, #1b1e25 0%, #0d0e11 100%);
+    border-width: 1px;
+    border-color: #ffffff17;
+    for d in ["M12.5 31V19.5a7 7 0 0 1 7-7H35", "M51.5 33v11.5a7 7 0 0 1-7 7H29"]: Path {
         width: 100%;
         height: 100%;
         viewbox-width: 64;
         viewbox-height: 64;
-        commands: "M16 14h28a5 5 0 0 1 5 5v17a5 5 0 0 1-5 5h-28a5 5 0 0 1-5-5v-17a5 5 0 0 1 5-5z";
-        stroke: root.filled ? #0e0f12 : Theme.accent;
-        stroke-width: root.size * 4.2 / 64;
+        commands: d;
+        stroke: root.gradient;
+        stroke-width: root.size * 5.5 / 64;
+        stroke-line-cap: round;
         fill: transparent;
+    }
+    for dot in [{ x: 46.5, y: 17.5, color: #b4f5e4 }, { x: 17.5, y: 46.5, color: #3fa2c4 }]: Rectangle {
+        x: root.size * (dot.x - 3.6) / 64;
+        y: root.size * (dot.y - 3.6) / 64;
+        width: root.size * 7.2 / 64;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: dot.color;
     }
     Path {
         width: 100%;
         height: 100%;
         viewbox-width: 64;
         viewbox-height: 64;
-        commands: "M33.5 29.5L33.5 53L39.4 47.3L43.6 56.2L48.3 54L44.1 45.2L52.2 45.2Z";
-        fill: root.filled ? #0e0f12 : Theme.accent;
-        stroke: root.filled ? Theme.accent : #0e0f12;
-        stroke-width: root.size * 2.6 / 64;
+        commands: "M26 22L26 42L31.2 37.3L34.8 45L38.6 43.3L35.1 35.7L42 35.7Z";
+        fill: root.gradient;
+        stroke: #0d0e11;
+        stroke-width: root.size * 2.2 / 64;
     }
 }
 

@@ -1,7 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64">
   <title>SomeDesk</title>
-  <rect x="2" y="2" width="60" height="60" rx="14" fill="#16181d"/>
-  <rect x="2.5" y="2.5" width="59" height="59" rx="13.5" fill="none" stroke="#2a2e36"/>
-  <rect x="12" y="15" width="36" height="25" rx="5" fill="none" stroke="#7dd3c0" stroke-width="4"/>
-  <path d="M33 29 L33 51.5 L38.7 46 L42.8 54.6 L47.3 52.5 L43.2 44 L51 44 Z" fill="#7dd3c0" stroke="#16181d" stroke-width="2.6" stroke-linejoin="round"/>
+  <defs>
+    <linearGradient id="sd-accent" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b4f5e4"/>
+      <stop offset="0.5" stop-color="#7dd3c0"/>
+      <stop offset="1" stop-color="#3fa2c4"/>
+    </linearGradient>
+    <linearGradient id="sd-tile" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1b1e25"/>
+      <stop offset="1" stop-color="#0d0e11"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#sd-tile)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="14.5" fill="none" stroke="#ffffff" stroke-opacity="0.09"/>
+  <path d="M12.5 31V19.5a7 7 0 0 1 7-7H35" fill="none" stroke="url(#sd-accent)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M51.5 33v11.5a7 7 0 0 1-7 7H29" fill="none" stroke="url(#sd-accent)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="46.5" cy="17.5" r="3.6" fill="#b4f5e4"/>
+  <circle cx="17.5" cy="46.5" r="3.6" fill="#3fa2c4"/>
+  <path d="M26 22L26 42L31.2 37.3L34.8 45L38.6 43.3L35.1 35.7L42 35.7Z" fill="url(#sd-accent)" stroke="#0d0e11" stroke-width="2.2" stroke-linejoin="round"/>
 </svg>

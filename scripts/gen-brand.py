@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Generates the SomeDesk brand assets in assets/brand/ from the mark defined here.
+
+The mark is a viewfinder whose two corners form an S, a dot for each of the two connected
+computers, and the pointer of the one in control.
+
+Writes mark.svg (= app-icon.svg), logo.svg (mark and wordmark, the text converted to outlines
+so it renders without Geist installed), logo-light.svg (the same for light backgrounds), the PNG
+sizes and app-icon.ico.
+
+Needs rsvg-convert, ImageMagick and fontTools (pip install fonttools)."""
+import pathlib
+import subprocess
+
+from fontTools.pens.svgPathPen import SVGPathPen
+from fontTools.pens.transformPen import TransformPen
+from fontTools.ttLib import TTFont
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+OUT = ROOT / "assets" / "brand"
+FONT = ROOT / "crates" / "app" / "ui" / "fonts" / "Geist-SemiBold.ttf"
+
+ACCENT_LIGHT, ACCENT, ACCENT_DEEP = "#b4f5e4", "#7dd3c0", "#3fa2c4"
+TILE_TOP, TILE_BOTTOM = "#1b1e25", "#0d0e11"
+TEXT, TEXT_ON_LIGHT = "#eceef2", "#14161b"
+
+# On a 64x64 grid. Keep crates/app/ui/widgets.slint (Mark) in sync.
+BRACKET_TOP = "M12.5 31V19.5a7 7 0 0 1 7-7H35"
+BRACKET_BOTTOM = "M51.5 33v11.5a7 7 0 0 1-7 7H29"
+POINTER = "M26 22L26 42L31.2 37.3L34.8 45L38.6 43.3L35.1 35.7L42 35.7Z"
+
+DEFS = f"""  <defs>
+    <linearGradient id="sd-accent" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="{ACCENT_LIGHT}"/>
+      <stop offset="0.5" stop-color="{ACCENT}"/>
+      <stop offset="1" stop-color="{ACCENT_DEEP}"/>
+    </linearGradient>
+    <linearGradient id="sd-tile" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="{TILE_TOP}"/>
+      <stop offset="1" stop-color="{TILE_BOTTOM}"/>
+    </linearGradient>
+  </defs>"""
+
+MARK = f"""  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#sd-tile)"/>
+  <rect x="2.5" y="2.5" width="59" height="59" rx="14.5" fill="none" stroke="#ffffff" stroke-opacity="0.09"/>
+  <path d="{BRACKET_TOP}" fill="none" stroke="url(#sd-accent)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="{BRACKET_BOTTOM}" fill="none" stroke="url(#sd-accent)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="46.5" cy="17.5" r="3.6" fill="{ACCENT_LIGHT}"/>
+  <circle cx="17.5" cy="46.5" r="3.6" fill="{ACCENT_DEEP}"/>
+  <path d="{POINTER}" fill="url(#sd-accent)" stroke="{TILE_BOTTOM}" stroke-width="2.2" stroke-linejoin="round"/>"""
+
+
+def svg(width: int, height: int, view_w: float, body: str) -> str:
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {view_w:g} 64">\n  <title>SomeDesk</title>\n{DEFS}\n{body}\n</svg>\n'
+    )
+
+
+def text_path(text: str, size: float, x: float, baseline: float, tracking: float) -> tuple[str, float]:
+    """`text` in Geist SemiBold as one SVG path; returns the path and its right edge."""
+    font = TTFont(FONT)
+    glyphs, cmap = font.getGlyphSet(), font.getBestCmap()
+    scale = size / font["head"].unitsPerEm
+    pen = SVGPathPen(glyphs)
+    for ch in text:
+        name = cmap[ord(ch)]
+        glyphs[name].draw(TransformPen(pen, (scale, 0, 0, -scale, x, baseline)))
+        x += glyphs[name].width * scale + tracking
+    return pen.getCommands(), x - tracking
+
+
+def main() -> None:
+    mark = svg(512, 512, 64, MARK)
+    (OUT / "mark.svg").write_text(mark)
+    (OUT / "app-icon.svg").write_text(mark)
+
+    words, right = text_path("SomeDesk", 34, 80, 43.5, -0.8)
+    width = right + 4
+    logo = svg(round(width * 2), 128, width, f'{MARK}\n  <path d="{words}" fill="{TEXT}"/>')
+    (OUT / "logo.svg").write_text(logo)
+    light = svg(round(width * 2), 128, width, f'{MARK}\n  <path d="{words}" fill="{TEXT_ON_LIGHT}"/>')
+    (OUT / "logo-light.svg").write_text(light)
+
+    def png(src: str, dst: str, w: int) -> None:
+        subprocess.run(["rsvg-convert", "-w", str(w), "-o", str(OUT / dst), str(OUT / src)], check=True)
+
+    sizes = [16, 32, 48, 64, 128, 256, 512]
+    for s in sizes:
+        png("app-icon.svg", f"app-icon-{s}.png", s)
+    png("mark.svg", "mark.png", 256)
+    png("logo.svg", "logo.png", round(width * 8))
+    subprocess.run(
+        ["convert", *[str(OUT / f"app-icon-{s}.png") for s in sizes if s <= 256], str(OUT / "app-icon.ico")],
+        check=True,
+    )
+    print(f"wrote the brand assets to {OUT.relative_to(ROOT)}")
+
+
+if __name__ == "__main__":
+    main()
