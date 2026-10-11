@@ -20,6 +20,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # A failed run still saves what it compiled, so the next run doesn't start cold.
+          cache-on-failure: true
       - name: System libraries
         run: |
           sudo apt-get update
@@ -44,6 +47,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # A failed run still saves what it compiled, so the next run doesn't start cold.
+          cache-on-failure: true
       - name: System libraries and test tools
         run: |
           sudo apt-get update
@@ -62,6 +68,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # A failed run still saves what it compiled, so the next run doesn't start cold.
+          cache-on-failure: true
       - name: Tests (without database or display)
         run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
       - run: cargo build --release -p somedesk-app
@@ -76,6 +85,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # A failed run still saves what it compiled, so the next run doesn't start cold.
+          cache-on-failure: true
       - name: Tests (without database or display)
         run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
       - run: packaging/macos/make-app.sh
@@ -91,6 +103,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # A failed run still saves what it compiled, so the next run doesn't start cold.
+          cache-on-failure: true
       - name: System libraries
         run: |
           sudo apt-get update

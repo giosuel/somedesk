@@ -17,9 +17,9 @@ DB_URL="${ADMIN_URL%/*}/somedesk_nat"
 ME="$(id -un)"
 WORK="$(mktemp -d)"
 
-# Two builds: with --example, cargo would build only the example and skip the server binary.
-cargo build -q -p somedesk-server
-cargo build -q -p somedesk-e2e-tests --example nat_peer
+# --workspace resolves dependency features like `cargo test --workspace` (scripts/test.sh), so
+# everything the tests already compiled is reused instead of being built a second time.
+cargo build -q --workspace --bins --examples
 PEER="$PWD/target/debug/examples/nat_peer"
 
 cleanup() {
