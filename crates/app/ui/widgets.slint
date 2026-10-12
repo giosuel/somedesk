@@ -234,10 +234,15 @@ export component Field inherits VerticalLayout {
 }
 
 export component Card inherits Rectangle {
+    /// Pointed out by the tour: an accent outline with a soft glow.
+    in property <bool> highlighted;
     background: Theme.surface;
     border-radius: Theme.radius-lg;
-    border-width: 1px;
-    border-color: Theme.border;
+    border-width: root.highlighted ? 2px : 1px;
+    border-color: root.highlighted ? Theme.accent : Theme.border;
+    drop-shadow-blur: root.highlighted ? 28px : 0px;
+    drop-shadow-color: #7dd3c055;
+    animate border-color, drop-shadow-blur { duration: 250ms; }
 }
 
 /// A card heading: plain sentence case, muted.

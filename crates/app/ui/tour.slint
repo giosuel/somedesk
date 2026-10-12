@@ -1,0 +1,235 @@
+// The welcome tour: Desi, the mascot, explains the home screen in a few steps. Each step shows
+// a pose, opens a view of the home screen and outlines the card it talks about.
+// The mascot's art is in assets/mascot (scripts/gen-mascot.py).
+
+import { Theme, Icons } from "theme.slint";
+import { PrimaryButton, GhostButton, LinkText } from "widgets.slint";
+import { HomeView } from "home.slint";
+
+export struct TourStep {
+    pose: image,
+    title: string,
+    text: string,
+    /// The card to outline (see `tour-target` on the home pages), or "".
+    target: string,
+    view: HomeView,
+}
+
+export global TourSteps {
+    out property <[TourStep]> desktop: [
+        {
+            pose: @image-url("../../../assets/mascot/wave.svg"),
+            title: "Hi, I'm Desi!",
+            text: "Let me show you around SomeDesk. It takes five quick steps, and you can skip me any time.",
+            target: "",
+            view: HomeView.connect,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/point.svg"),
+            title: "This computer's ID",
+            text: "Others reach this computer with this number. Nobody gets in unless you accept, or you let your own devices connect without asking.",
+            target: "id",
+            view: HomeView.connect,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/connect.svg"),
+            title: "Reach another computer",
+            text: "Type its ID here, or connect to one of your devices in the list below. Sign in on your other computers and they show up there.",
+            target: "connect",
+            view: HomeView.connect,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/key.svg"),
+            title: "Encrypted end to end",
+            text: "Your server only ever passes on encrypted data. Compare the fingerprint with the other side to be sure it's really them.",
+            target: "id",
+            view: HomeView.connect,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/cheer.svg"),
+            title: "You're all set!",
+            text: "Settings has unattended access for your own devices, clipboard sharing and direct connections. You can take this tour again from here.",
+            target: "sessions",
+            view: HomeView.settings,
+        },
+    ];
+    out property <[TourStep]> mobile: [
+        {
+            pose: @image-url("../../../assets/mascot/wave.svg"),
+            title: "Hi, I'm Desi!",
+            text: "Let me show you around. It takes five quick steps, and you can skip me any time.",
+            target: "",
+            view: HomeView.connect,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/connect.svg"),
+            title: "Reach your computers",
+            text: "Type a computer's ID, or tap Connect next to one of your devices. Computers you sign in on appear here.",
+            target: "devices",
+            view: HomeView.connect,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/point.svg"),
+            title: "In a session",
+            text: "Tap to click, long-press to right-click and drag to drag. The buttons at the top open the keyboard and turn dragging into scrolling.",
+            target: "connect",
+            view: HomeView.connect,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/key.svg"),
+            title: "Encrypted end to end",
+            text: "Your server only ever passes on encrypted data. Your fingerprint is here, to compare with the other side.",
+            target: "account",
+            view: HomeView.settings,
+        },
+        {
+            pose: @image-url("../../../assets/mascot/cheer.svg"),
+            title: "You're all set!",
+            text: "Clipboard sharing and direct connections are in Settings, and so is this tour if you want to see it again.",
+            target: "sessions",
+            view: HomeView.settings,
+        },
+    ];
+}
+
+component Dot inherits Rectangle {
+    in property <bool> active;
+    width: root.active ? 18px : 6px;
+    height: 6px;
+    border-radius: 3px;
+    background: root.active ? Theme.accent : Theme.border-strong;
+    animate width, background { duration: 200ms; }
+}
+
+/// Desi and her speech bubble. On the desktop they sit in the bottom-right corner; on a phone the
+/// bubble spans the bottom with Desi standing on its edge.
+export component Tour inherits Rectangle {
+    in property <bool> mobile;
+    in property <length> inset-bottom;
+    in-out property <int> step;
+    /// Opens the view the step talks about.
+    callback show(HomeView);
+    /// Skipped or finished.
+    callback done();
+
+    property <[TourStep]> steps: root.mobile ? TourSteps.mobile : TourSteps.desktop;
+    property <TourStep> current: root.steps[root.step];
+    property <bool> last: root.step >= root.steps.length - 1;
+    property <length> mascot-height: root.mobile ? 136px : 230px;
+
+    function go(i: int) {
+        root.step = i;
+        root.show(root.steps[i].view);
+    }
+
+    init => { root.go(0); }
+
+    // A light veil: the screen stays readable, so the outlined card can be seen.
+    Rectangle {
+        background: #05060866;
+        TouchArea { }
+    }
+
+    bubble := Rectangle {
+        width: root.mobile ? root.width - 24px : 400px;
+        height: body.preferred-height;
+        x: root.mobile ? 12px : root.width - self.width - 200px;
+        y: root.height - self.height - (root.mobile ? root.inset-bottom + 12px : 40px);
+        border-radius: 18px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+        drop-shadow-blur: 40px;
+        drop-shadow-color: #000000a0;
+        drop-shadow-offset-y: 14px;
+
+        // The bubble's tail, towards Desi (desktop only).
+        if !root.mobile: Path {
+            x: parent.width - 1px;
+            y: parent.height - 64px;
+            width: 13px;
+            height: 22px;
+            viewbox-width: 13;
+            viewbox-height: 22;
+            commands: "M0 0L13 11L0 22";
+            fill: Theme.surface;
+            stroke: Theme.border-strong;
+            stroke-width: 1px;
+        }
+
+        body := VerticalLayout {
+            padding: 22px;
+            padding-top: root.mobile ? 20px : 22px;
+            padding-right: root.mobile ? 22px : 22px;
+            spacing: 10px;
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: root.current.title;
+                    color: Theme.text;
+                    font-size: 18px;
+                    font-weight: 600;
+                    letter-spacing: -0.3px;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: (root.step + 1) + " / " + root.steps.length;
+                    color: Theme.subtle;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+            }
+            Text {
+                text: root.current.text;
+                color: Theme.text-2;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                padding-top: 6px;
+                spacing: 6px;
+                alignment: space-between;
+                HorizontalLayout {
+                    spacing: 5px;
+                    alignment: start;
+                    for s[i] in root.steps: Dot { y: (parent.height - self.height) / 2; active: i == root.step; }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    if !root.last: LinkText {
+                        text: "Skip";
+                        color: Theme.muted;
+                        vertical-alignment: center;
+                        clicked => { root.done(); }
+                    }
+                    if root.step > 0: GhostButton {
+                        button-height: 38px;
+                        icon: Icons.arrow-left;
+                        clicked => { root.go(root.step - 1); }
+                    }
+                    PrimaryButton {
+                        height: 38px;
+                        text: root.last ? "Let's go!" : "Next";
+                        clicked => {
+                            if (root.last) {
+                                root.done();
+                            } else {
+                                root.go(root.step + 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Image {
+        source: root.current.pose;
+        height: root.mascot-height;
+        width: self.height * 200 / 260;
+        x: root.mobile ? bubble.x + 10px : bubble.x + bubble.width + 6px;
+        y: root.mobile ? bubble.y - self.height + 6px : bubble.y + bubble.height - self.height + 26px;
+    }
+}

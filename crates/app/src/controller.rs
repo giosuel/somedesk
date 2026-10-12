@@ -51,6 +51,9 @@ struct Settings {
     /// Computers this device connected to recently, newest first.
     #[serde(default)]
     recent: Vec<Recent>,
+    /// The welcome tour was finished or skipped.
+    #[serde(default)]
+    tour_done: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -70,6 +73,7 @@ impl Default for Settings {
             allow_direct: true,
             last_server: String::new(),
             recent: Vec::new(),
+            tour_done: false,
         }
     }
 }
@@ -562,6 +566,11 @@ impl Controller {
         let c = self.clone();
         ui.on_soft_input(move |text, ctrl, alt| c.soft_input(&text, ctrl, alt));
         let c = self.clone();
+        ui.on_tour_done(move || {
+            c.0.state.lock().unwrap().settings.tour_done = true;
+            c.save_settings();
+        });
+        let c = self.clone();
         ui.on_soft_key(move |text, ctrl, alt| c.type_keys(&text, ctrl, alt));
     }
 
@@ -766,7 +775,13 @@ impl Controller {
         let user = creds.username.clone();
         let fp = fingerprint(&creds.identity_pk);
         let server = creds.server.clone();
+        // Desi shows new users around once.
+        let tour = !self.0.state.lock().unwrap().settings.tour_done;
         self.ui(move |ui| {
+            if tour {
+                ui.set_tour_step(0);
+                ui.set_tour_visible(true);
+            }
             ui.set_my_id(id.into());
             ui.set_my_device_name(name.into());
             ui.set_user_letter(letter(&user).into());
