@@ -31,6 +31,7 @@ target/release/somedesk --server your.server.example
 | Server on a host | `cargo deb -p somedesk-server` (systemd unit, `somedesk` user, `/etc/somedesk/server.env`) or `packaging/server/somedesk-server.service` | `.deb` |
 | Linux client | `cargo deb -p somedesk-app` (desktop entry, icons) | `.deb` |
 | Linux client, any distribution | `packaging/linux/build-appimage.sh` (bundles its libraries except glibc, graphics and PipeWire; build on an old distribution such as Debian 12) | `.AppImage` |
+| Arch Linux client | `packaging/aur/test.sh` (builds the AUR packages `somedesk` and `somedesk-bin` in an Arch container) | `.pkg.tar.zst` |
 | Windows client | `packaging/windows/build-zip.sh` (cross-built with MinGW; icon embedded) | `.zip` with `somedesk.exe` and runtime DLLs |
 | macOS client | `packaging/macos/make-app.sh` on a Mac (unsigned) | `SomeDesk.app` + `.zip` |
 | Android app | `packaging/android/build-apk.sh` (needs the Android SDK and NDK; see the script) | `.apk` for phones and emulators |

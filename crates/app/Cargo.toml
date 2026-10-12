@@ -60,13 +60,14 @@ control your other computers, or let someone help you, through your own SomeDesk
 server. Works on X11 and Wayland (through the desktop portal)."""
 assets = [
     ["target/release/somedesk", "usr/bin/", "755"],
-    ["../../packaging/linux/somedesk.desktop", "usr/share/applications/", "644"],
-    ["../../assets/brand/app-icon.svg", "usr/share/icons/hicolor/scalable/apps/somedesk.svg", "644"],
-    ["../../assets/brand/app-icon-16.png", "usr/share/icons/hicolor/16x16/apps/somedesk.png", "644"],
-    ["../../assets/brand/app-icon-32.png", "usr/share/icons/hicolor/32x32/apps/somedesk.png", "644"],
-    ["../../assets/brand/app-icon-48.png", "usr/share/icons/hicolor/48x48/apps/somedesk.png", "644"],
-    ["../../assets/brand/app-icon-64.png", "usr/share/icons/hicolor/64x64/apps/somedesk.png", "644"],
-    ["../../assets/brand/app-icon-128.png", "usr/share/icons/hicolor/128x128/apps/somedesk.png", "644"],
-    ["../../assets/brand/app-icon-256.png", "usr/share/icons/hicolor/256x256/apps/somedesk.png", "644"],
-    ["../../assets/brand/app-icon-512.png", "usr/share/icons/hicolor/512x512/apps/somedesk.png", "644"],
+    ["../../packaging/linux/ch.giosuel.SomeDesk.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/ch.giosuel.SomeDesk.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["../../assets/brand/app-icon.svg", "usr/share/icons/hicolor/scalable/apps/ch.giosuel.SomeDesk.svg", "644"],
+    ["../../assets/brand/app-icon-16.png", "usr/share/icons/hicolor/16x16/apps/ch.giosuel.SomeDesk.png", "644"],
+    ["../../assets/brand/app-icon-32.png", "usr/share/icons/hicolor/32x32/apps/ch.giosuel.SomeDesk.png", "644"],
+    ["../../assets/brand/app-icon-48.png", "usr/share/icons/hicolor/48x48/apps/ch.giosuel.SomeDesk.png", "644"],
+    ["../../assets/brand/app-icon-64.png", "usr/share/icons/hicolor/64x64/apps/ch.giosuel.SomeDesk.png", "644"],
+    ["../../assets/brand/app-icon-128.png", "usr/share/icons/hicolor/128x128/apps/ch.giosuel.SomeDesk.png", "644"],
+    ["../../assets/brand/app-icon-256.png", "usr/share/icons/hicolor/256x256/apps/ch.giosuel.SomeDesk.png", "644"],
+    ["../../assets/brand/app-icon-512.png", "usr/share/icons/hicolor/512x512/apps/ch.giosuel.SomeDesk.png", "644"],
 ]

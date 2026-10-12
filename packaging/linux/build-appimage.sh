@@ -31,10 +31,10 @@ fi
 APPDIR=target/appimage/SomeDesk.AppDir
 rm -rf "$APPDIR"
 install -Dm755 target/release/somedesk "$APPDIR/usr/bin/somedesk"
-install -Dm644 packaging/linux/somedesk.desktop "$APPDIR/usr/share/applications/somedesk.desktop"
-install -Dm644 assets/brand/app-icon.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/somedesk.svg"
+install -Dm644 packaging/linux/ch.giosuel.SomeDesk.desktop -t "$APPDIR/usr/share/applications"
+install -Dm644 assets/brand/app-icon.svg "$APPDIR/usr/share/icons/hicolor/scalable/apps/ch.giosuel.SomeDesk.svg"
 for size in 16 32 48 64 128 256 512; do
-    install -Dm644 "assets/brand/app-icon-$size.png" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/somedesk.png"
+    install -Dm644 "assets/brand/app-icon-$size.png" "$APPDIR/usr/share/icons/hicolor/${size}x${size}/apps/ch.giosuel.SomeDesk.png"
 done
 
 mkdir -p target/dist
@@ -46,8 +46,8 @@ export LDAI_OUTPUT="$OUT" OUTPUT="$OUT"
 # PipeWire's client library has to match the PipeWire running on the user's system (its
 # plugins are loaded from there), so it is not bundled; every current desktop provides it.
 "$LINUXDEPLOY" --appdir "$APPDIR" \
-    --desktop-file "$APPDIR/usr/share/applications/somedesk.desktop" \
-    --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/somedesk.png" \
+    --desktop-file "$APPDIR/usr/share/applications/ch.giosuel.SomeDesk.desktop" \
+    --icon-file "$APPDIR/usr/share/icons/hicolor/256x256/apps/ch.giosuel.SomeDesk.png" \
     --exclude-library 'libpipewire-0.3.so*' \
     --output appimage
 echo "$OUT"

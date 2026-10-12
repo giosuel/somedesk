@@ -53,7 +53,7 @@ git clone https://github.com/giosuel/somedesk && cd somedesk
 SOMEDESK_DB_PASSWORD=change-me docker compose -f packaging/server/compose.yaml up -d
 ```
 
-**2. Install the app** from the [releases](https://github.com/giosuel/somedesk/releases) on both computers. Create an account with your server's address, keep the recovery key somewhere safe, and connect using the other computer's nine-digit ID.
+**2. Install the app** from the [releases](https://github.com/giosuel/somedesk/releases) on both computers (on Arch Linux, from the AUR: `somedesk` or `somedesk-bin`). Create an account with your server's address, keep the recovery key somewhere safe, and connect using the other computer's nine-digit ID.
 
 See [Self-hosting](docs/self-hosting.md) for the `.deb`, systemd and building from source.
 

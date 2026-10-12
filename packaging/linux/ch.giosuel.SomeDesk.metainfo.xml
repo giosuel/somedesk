@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>ch.giosuel.SomeDesk</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <name>SomeDesk</name>
+  <summary>Self-hosted, end-to-end encrypted remote desktop</summary>
+  <developer id="ch.giosuel">
+    <name>giosuel</name>
+  </developer>
+  <description>
+    <p>
+      Connect to and control your other computers, or let someone help you with theirs, through
+      a server you run yourself. Sessions are encrypted end to end: the server only passes on
+      data it cannot read.
+    </p>
+    <ul>
+      <li>Remote control with keyboard and mouse, on X11 and Wayland</li>
+      <li>Shared clipboard and file transfers in both directions</li>
+      <li>Direct peer-to-peer connections, relayed by your server when that's not possible</li>
+      <li>Unattended access to your own devices, and trusted contacts</li>
+      <li>Identity fingerprints to rule out interception</li>
+    </ul>
+    <p>
+      SomeDesk needs a SomeDesk server. On Wayland, the desktop asks for permission to share the
+      screen the first time someone connects.
+    </p>
+  </description>
+  <launchable type="desktop-id">ch.giosuel.SomeDesk.desktop</launchable>
+  <provides>
+    <binary>somedesk</binary>
+  </provides>
+  <url type="homepage">https://somedesk.giosuel.ch/</url>
+  <url type="help">https://somedesk.giosuel.ch/getting-started/</url>
+  <url type="bugtracker">https://github.com/giosuel/somedesk/issues</url>
+  <url type="vcs-browser">https://github.com/giosuel/somedesk</url>
+  <branding>
+    <color type="primary" scheme_preference="light">#a8e6d8</color>
+    <color type="primary" scheme_preference="dark">#18241f</color>
+  </branding>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The home screen, with this computer's ID and your devices</caption>
+      <image>https://raw.githubusercontent.com/giosuel/somedesk/main/packaging/linux/screenshots/home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Controlling another computer</caption>
+      <image>https://raw.githubusercontent.com/giosuel/somedesk/main/packaging/linux/screenshots/session.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Accepting a connection, after comparing fingerprints</caption>
+      <image>https://raw.githubusercontent.com/giosuel/somedesk/main/packaging/linux/screenshots/incoming.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="0.1.0" date="2026-10-12">
+      <description>
+        <p>The first release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
