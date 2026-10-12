@@ -1,6 +1,6 @@
 site_name: SomeDesk
 site_description: Remote desktop you host yourself. End-to-end encrypted, zero-knowledge sign-in, written in Rust.
-site_url: https://giosuel.github.io/somedesk/
+site_url: https://somedesk.giosuel.ch/
 repo_url: https://github.com/giosuel/somedesk
 repo_name: giosuel/somedesk
 edit_uri: edit/main/docs/
