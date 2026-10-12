@@ -26,8 +26,8 @@ target/release/somedesk --server your.server.example
 
 | What | How | Output |
 |---|---|---|
-| Server container | `podman build -f packaging/server/Dockerfile -t somedesk-server .` (or `docker build`) | image (≈95 MB) |
-| Server + PostgreSQL | `SOMEDESK_DB_PASSWORD=… podman compose -f packaging/server/compose.yaml up -d` | two containers |
+| Server container | Published as `ghcr.io/giosuel/somedesk-server` for x86-64 and ARM64: `latest` and `<version>` for releases, `main` for the latest code on main. To build it: `podman build -f packaging/server/Dockerfile -t somedesk-server .` (or `docker build`) | image (≈95 MB) |
+| Server + PostgreSQL | `SOMEDESK_DB_PASSWORD=… podman compose -f packaging/server/compose.yaml up -d` (uses the published image; `SOMEDESK_IMAGE` picks another) | two containers |
 | Server on a host | `cargo deb -p somedesk-server` (systemd unit, `somedesk` user, `/etc/somedesk/server.env`) or `packaging/server/somedesk-server.service` | `.deb` |
 | Linux client | `cargo deb -p somedesk-app` (desktop entry, icons) | `.deb` |
 | Linux client, any distribution | `packaging/linux/build-appimage.sh` (bundles its libraries except glibc, graphics and PipeWire; build on an old distribution such as Debian 12) | `.AppImage` |

@@ -49,8 +49,8 @@
 **1. Run the server** on a machine both computers can reach (UDP port 21116):
 
 ```sh
-git clone https://github.com/giosuel/somedesk && cd somedesk
-SOMEDESK_DB_PASSWORD=change-me docker compose -f packaging/server/compose.yaml up -d
+curl -O https://raw.githubusercontent.com/giosuel/somedesk/main/packaging/server/compose.yaml
+SOMEDESK_DB_PASSWORD=change-me docker compose up -d
 ```
 
 **2. Install the app** from the [releases](https://github.com/giosuel/somedesk/releases) on both computers (on Arch Linux, from the AUR: `somedesk` or `somedesk-bin`). Create an account with your server's address, keep the recovery key somewhere safe, and connect using the other computer's nine-digit ID.
