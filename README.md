@@ -15,7 +15,7 @@
   <a href="https://github.com/giosuel/somedesk/releases"><img src="https://img.shields.io/github/v/release/giosuel/somedesk?include_prereleases&style=flat-square&labelColor=16181d&color=7dd3c0&label=release" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-7dd3c0?style=flat-square&labelColor=16181d" alt="License: AGPL-3.0"></a>
   <img src="https://img.shields.io/badge/rust-1.88%2B-7dd3c0?style=flat-square&labelColor=16181d&logo=rust&logoColor=white" alt="Rust 1.88+">
-  <img src="https://img.shields.io/badge/platforms-Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-7dd3c0?style=flat-square&labelColor=16181d" alt="Linux, Windows, macOS">
+  <img src="https://img.shields.io/badge/platforms-Linux%20%C2%B7%20Windows%20%C2%B7%20macOS%20%C2%B7%20Android-7dd3c0?style=flat-square&labelColor=16181d" alt="Linux, Windows, macOS, Android">
 </p>
 
 <p align="center">
@@ -91,7 +91,7 @@ Both devices stay connected to your server, which handles accounts and tells the
 
 ## Status
 
-Remote control works end to end on **Linux**, both X11 and Wayland (through the desktop portal). The **Windows** and **macOS** backends are written and pass their tests in CI, but haven't yet been used in real sessions on those systems. See [Platforms](docs/platforms.md).
+Remote control works end to end on **Linux**, both X11 and Wayland (through the desktop portal). The **Windows** and **macOS** backends are written and pass their tests in CI, but haven't yet been used in real sessions on those systems. The **Android** app connects to and controls your computers (it doesn't share the phone's screen), tested on the Android emulator. See [Platforms](docs/platforms.md).
 
 ## Contributing
 

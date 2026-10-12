@@ -1,0 +1,821 @@
+// The phone layout (Android): the same screens as the desktop, in one column with a bottom
+// navigation bar, and a full-screen session with touch controls. AppWindow picks these pages
+// when `mobile` is set and passes them the same properties as the desktop pages.
+
+import { Theme, Icons } from "theme.slint";
+import { Logo, Icon, Field, PrimaryButton, GhostButton, LinkText, Card, SectionTitle, Switch, Avatar, Divider, Spinner } from "widgets.slint";
+import { LoginForm } from "login.slint";
+import { DeviceItem, ContactItem, RecentItem, HomeView } from "home.slint";
+import { MonitorChoice, MonitorPicker } from "session.slint";
+
+// ---------------------------------------------------------------------------------- sign in
+
+export component MobileLoginPage inherits Rectangle {
+    in property <string> error;
+    in property <bool> busy;
+    in-out property <string> server;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <string> password2;
+    in-out property <string> device-name;
+    in-out property <bool> create-mode;
+    in-out property <bool> recover-mode;
+    in-out property <string> recovery-key;
+    callback submit();
+    background: Theme.bg;
+
+    Flickable {
+        content-height: Math.max(self.height, content.preferred-height);
+
+        content-width: self.width;
+        content := VerticalLayout {
+            padding: 24px;
+            padding-top: 28px;
+            spacing: 28px;
+            alignment: start;
+            Logo { mark-size: 30px; font-size: 17px; }
+            VerticalLayout {
+                spacing: 10px;
+                Text {
+                    text: "Your computers,\nwithin reach.";
+                    color: Theme.text;
+                    font-size: 30px;
+                    font-weight: 600;
+                    letter-spacing: -0.9px;
+                }
+                Text {
+                    text: "Remote access you host yourself, encrypted end to end.";
+                    color: Theme.muted;
+                    font-size: 15px;
+                    wrap: word-wrap;
+                }
+            }
+            LoginForm {
+                server <=> root.server;
+                username <=> root.username;
+                password <=> root.password;
+                password2 <=> root.password2;
+                device-name <=> root.device-name;
+                create-mode <=> root.create-mode;
+                recover-mode <=> root.recover-mode;
+                recovery-key <=> root.recovery-key;
+                error: root.error;
+                busy: root.busy;
+                device-label: "Name of this phone";
+                device-placeholder: "e.g. my-phone";
+                submit => { root.submit(); }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------- home
+
+component TabButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> active;
+    callback clicked;
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        Rectangle {
+            height: 28px;
+            Rectangle {
+                width: 52px;
+                height: 28px;
+                border-radius: 14px;
+                background: root.active ? Theme.accent-soft : transparent;
+                animate background { duration: 150ms; }
+            }
+            Icon { d: root.icon; size: 19px; color: root.active ? Theme.accent : Theme.subtle; }
+        }
+        Text {
+            text: root.text;
+            color: root.active ? Theme.text : Theme.subtle;
+            font-size: 11px;
+            font-weight: root.active ? 600 : 400;
+            horizontal-alignment: center;
+        }
+    }
+    TouchArea { clicked => { root.clicked(); } }
+}
+
+component MobileDeviceRow inherits Rectangle {
+    in property <DeviceItem> device;
+    callback connect(string);
+    height: 64px;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 12px;
+        spacing: 12px;
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: root.device.online ? Theme.accent-soft : #1f2228;
+            Icon {
+                d: root.device.is-self ? Icons.phone : Icons.monitor;
+                size: 18px;
+                stroke: 1.8px;
+                color: root.device.online ? Theme.accent : Theme.subtle;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Text {
+                text: root.device.name;
+                color: root.device.online || root.device.is-self ? Theme.text : #a3a9b4;
+                font-size: 15px;
+                font-weight: 500;
+                overflow: elide;
+            }
+            Text {
+                text: root.device.is-self ? "This phone" : (root.device.online ? "Online" : "Offline") + "  ·  " + root.device.id-label;
+                color: root.device.online && !root.device.is-self ? Theme.accent : Theme.subtle;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+        if !root.device.is-self: GhostButton {
+            y: (parent.height - self.height) / 2;
+            button-height: 36px;
+            text: "Connect";
+            enabled: root.device.online;
+            clicked => { root.connect(root.device.id); }
+        }
+    }
+}
+
+component MobileContactRow inherits Rectangle {
+    in property <ContactItem> contact;
+    callback revoke(string);
+    callback forget(string);
+    height: body.preferred-height;
+    body := VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 12px;
+            Avatar { y: (parent.height - self.height) / 2; letter: root.contact.letter; size: 38px; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.contact.username; color: Theme.text; font-size: 15px; font-weight: 500; }
+                Text { text: root.contact.fingerprint; color: Theme.text-2; font-size: 12px; font-family: Theme.mono; }
+                Text { text: root.contact.detail; color: Theme.subtle; font-size: 12px; }
+            }
+        }
+        if root.contact.unattended != "": Text {
+            text: "Can connect without asking: " + root.contact.unattended;
+            color: Theme.warning;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            if root.contact.unattended != "": GhostButton {
+                button-height: 34px;
+                text: "Revoke access";
+                clicked => { root.revoke(root.contact.username); }
+            }
+            GhostButton {
+                button-height: 34px;
+                text: "Forget";
+                fg: Theme.muted;
+                clicked => { root.forget(root.contact.username); }
+            }
+        }
+    }
+}
+
+component MobileSetting inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> detail;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    spacing: 14px;
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+        horizontal-stretch: 1;
+        Text { text: root.title; color: Theme.text; font-size: 15px; font-weight: 500; }
+        Text { text: root.detail; color: Theme.subtle; font-size: 12px; wrap: word-wrap; }
+    }
+    Switch {
+        y: (parent.height - self.height) / 2;
+        checked <=> root.checked;
+        toggled(v) => { root.toggled(v); }
+    }
+}
+
+component Heading inherits VerticalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    spacing: 4px;
+    Text { text: root.title; color: Theme.text; font-size: 24px; font-weight: 600; letter-spacing: -0.5px; wrap: word-wrap; }
+    if root.subtitle != "": Text { text: root.subtitle; color: Theme.muted; font-size: 14px; wrap: word-wrap; }
+}
+
+export component MobileHomePage inherits Rectangle {
+    in property <string> my-id;
+    in property <string> my-device-name;
+    in property <string> username;
+    in property <string> user-letter;
+    in property <string> greeting;
+    in property <string> fingerprint;
+    in property <string> server-label;
+    in property <bool> online;
+    in property <string> status-text;
+    in property <[DeviceItem]> devices;
+    in property <[ContactItem]> contacts;
+    in property <[RecentItem]> recents;
+    in property <bool> connect-busy;
+    in-out property <string> connect-id;
+    in-out property <bool> share-clipboard;
+    in-out property <bool> allow-direct;
+    in-out property <HomeView> view: HomeView.connect;
+    /// The soft keyboard is up: the navigation makes way for the content.
+    in property <bool> keyboard-open;
+    callback allow-direct-changed(bool);
+    callback connect(string);
+    callback share-clipboard-changed(bool);
+    callback sign-out();
+    callback revoke-contact(string);
+    callback forget-contact(string);
+    background: Theme.bg;
+
+    // Back goes to the first tab, and leaves the app from there.
+    back := FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Back && root.view != HomeView.connect) {
+                root.view = HomeView.connect;
+                return accept;
+            }
+            reject
+        }
+    }
+
+    VerticalLayout {
+        // Top bar
+        Rectangle {
+            height: 56px;
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                spacing: 10px;
+                Logo { mark-size: 26px; font-size: 16px; }
+                Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    y: (parent.height - self.height) / 2;
+                    height: 28px;
+                    width: status.preferred-width + 22px;
+                    border-radius: 14px;
+                    background: Theme.surface;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    status := HorizontalLayout {
+                        alignment: center;
+                        spacing: 7px;
+                        Rectangle {
+                            y: (parent.height - 7px) / 2;
+                            width: 7px;
+                            height: 7px;
+                            border-radius: 3.5px;
+                            background: root.online ? Theme.accent : Theme.warning;
+                        }
+                        Text { text: root.status-text; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+
+        // Content
+        Rectangle {
+            vertical-stretch: 1;
+
+            if root.view == HomeView.connect: Flickable {
+                content-height: Math.max(self.height, connect-content.preferred-height);
+
+                content-width: self.width;
+                connect-content := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 8px;
+                    spacing: 16px;
+                    alignment: start;
+                    Heading { title: root.greeting; subtitle: "Reach one of your computers."; }
+                    Card {
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 12px;
+                            SectionTitle { text: "Connect to a computer"; }
+                            Field {
+                                placeholder: "123 456 789";
+                                field-height: 54px;
+                                font-size: 22px;
+                                font-family: Theme.mono;
+                                text <=> root.connect-id;
+                                enabled: !root.connect-busy;
+                                accepted => { root.connect(root.connect-id); }
+                            }
+                            PrimaryButton {
+                                height: 48px;
+                                text: "Connect";
+                                icon: Icons.connect;
+                                busy: root.connect-busy;
+                                enabled: root.online;
+                                clicked => { root.connect(root.connect-id); }
+                            }
+                            if root.recents.length > 0: VerticalLayout {
+                                spacing: 2px;
+                                Text { text: "Recent"; color: Theme.subtle; font-size: 12px; }
+                                for r in root.recents: Rectangle {
+                                    height: 42px;
+                                    border-radius: 10px;
+                                    background: recent-ta.pressed ? Theme.raised : transparent;
+                                    HorizontalLayout {
+                                        padding-left: 4px;
+                                        spacing: 10px;
+                                        Icon { y: (parent.height - self.height) / 2; d: Icons.monitor; size: 16px; color: Theme.subtle; }
+                                        Text { text: r.label; color: Theme.text-2; font-size: 14px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                        Icon { y: (parent.height - self.height) / 2; d: Icons.connect; size: 16px; color: Theme.accent; }
+                                    }
+                                    recent-ta := TouchArea { clicked => { root.connect(r.id); } }
+                                }
+                            }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            padding-top: 16px;
+                            padding-bottom: 6px;
+                            HorizontalLayout {
+                                padding-left: 18px;
+                                padding-right: 18px;
+                                padding-bottom: 4px;
+                                spacing: 8px;
+                                SectionTitle { text: "Your devices"; }
+                                Text { text: root.devices.length; color: Theme.subtle; font-size: 12px; vertical-alignment: center; }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            for d in root.devices: MobileDeviceRow { device: d; connect(id) => { root.connect(id); } }
+                        }
+                    }
+                }
+            }
+
+            if root.view == HomeView.devices: Flickable {
+                content-height: Math.max(self.height, devices-content.preferred-height);
+
+                content-width: self.width;
+                devices-content := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 8px;
+                    spacing: 16px;
+                    alignment: start;
+                    Heading { title: "Devices"; subtitle: "Signed in to your account. Computers can be reached from this phone."; }
+                    Card {
+                        VerticalLayout {
+                            padding-top: 6px;
+                            padding-bottom: 6px;
+                            for d in root.devices: MobileDeviceRow { device: d; connect(id) => { root.connect(id); } }
+                        }
+                    }
+                }
+            }
+
+            if root.view == HomeView.contacts: Flickable {
+                content-height: Math.max(self.height, contacts-content.preferred-height);
+
+                content-width: self.width;
+                contacts-content := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 8px;
+                    spacing: 16px;
+                    alignment: start;
+                    Heading { title: "Contacts"; subtitle: "People you have connected with. You are warned if their identity ever changes."; }
+                    if root.contacts.length == 0: Card {
+                        VerticalLayout {
+                            padding: 28px;
+                            spacing: 10px;
+                            Icon { x: (parent.width - self.width) / 2; d: Icons.contacts; size: 26px; color: Theme.faint; }
+                            Text {
+                                text: "No contacts yet. They appear here after your first session with someone.";
+                                color: Theme.subtle;
+                                font-size: 14px;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    if root.contacts.length > 0: Card {
+                        VerticalLayout {
+                            for c in root.contacts: MobileContactRow {
+                                contact: c;
+                                revoke(u) => { root.revoke-contact(u); }
+                                forget(u) => { root.forget-contact(u); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.view == HomeView.settings: Flickable {
+                content-height: Math.max(self.height, settings-content.preferred-height);
+
+                content-width: self.width;
+                settings-content := VerticalLayout {
+                    padding: 18px;
+                    padding-top: 8px;
+                    spacing: 16px;
+                    alignment: start;
+                    Heading { title: "Settings"; }
+                    Card {
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 16px;
+                            SectionTitle { text: "Sessions"; }
+                            MobileSetting {
+                                title: "Share clipboard";
+                                detail: "Copy on one device, paste on the other during a session.";
+                                checked <=> root.share-clipboard;
+                                toggled(v) => { root.share-clipboard-changed(v); }
+                            }
+                            Divider { }
+                            MobileSetting {
+                                title: "Direct connections";
+                                detail: "Connect straight to the computer when possible, for lower latency. This shows your IP address to the other side; when off, sessions always go through the relay.";
+                                checked <=> root.allow-direct;
+                                toggled(v) => { root.allow-direct-changed(v); }
+                            }
+                        }
+                    }
+                    Card {
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 14px;
+                            SectionTitle { text: "Account"; }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Avatar { y: (parent.height - self.height) / 2; letter: root.user-letter; size: 40px; }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    Text { text: root.username; color: Theme.text; font-size: 15px; font-weight: 500; }
+                                    Text { text: root.server-label; color: Theme.subtle; font-size: 12px; overflow: elide; }
+                                }
+                            }
+                            Divider { }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Icon { y: (parent.height - self.height) / 2; d: Icons.phone; size: 16px; color: Theme.muted; }
+                                Text { text: root.my-device-name; color: Theme.muted; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                                Text { text: root.my-id; color: Theme.text-2; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                Icon { y: (parent.height - self.height) / 2; d: Icons.shield; size: 16px; color: Theme.accent; }
+                                Text { text: "Fingerprint"; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                Text { text: root.fingerprint; color: Theme.text-2; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
+                            }
+                            GhostButton {
+                                text: "Sign out";
+                                icon: Icons.logout;
+                                horizontal-stretch: 1;
+                                clicked => { root.sign-out(); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom navigation
+        if !root.keyboard-open: Rectangle {
+            height: 66px;
+            background: #121418;
+            Rectangle { y: 0; height: 1px; background: #1f2228; }
+            HorizontalLayout {
+                padding-top: 4px;
+                TabButton { text: "Connect"; icon: Icons.connect; active: root.view == HomeView.connect; clicked => { root.view = HomeView.connect; } }
+                TabButton { text: "Devices"; icon: Icons.monitor; active: root.view == HomeView.devices; clicked => { root.view = HomeView.devices; } }
+                TabButton { text: "Contacts"; icon: Icons.contacts; active: root.view == HomeView.contacts; clicked => { root.view = HomeView.contacts; } }
+                TabButton { text: "Settings"; icon: Icons.settings; active: root.view == HomeView.settings; clicked => { root.view = HomeView.settings; } }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------- session
+
+/// A square toolbar button that can stay switched on.
+component ToolButton inherits Rectangle {
+    in property <string> icon;
+    in property <bool> on;
+    in property <color> fg: Theme.text-2;
+    callback clicked;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: root.on ? Theme.accent-soft : ta.pressed ? Theme.raised : transparent;
+    Icon { d: root.icon; size: 19px; color: root.on ? Theme.accent : root.fg; }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+/// A key on the row of extra keys above the soft keyboard.
+component KeyCap inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    callback clicked;
+    width: Math.max(44px, label-text.preferred-width + 22px);
+    height: 36px;
+    border-radius: 8px;
+    background: root.on ? Theme.accent-soft : ta.pressed ? Theme.hover : Theme.raised;
+    border-width: 1px;
+    border-color: root.on ? Theme.accent : Theme.border-strong;
+    label-text := Text {
+        text: root.label;
+        color: root.on ? Theme.accent : Theme.text-2;
+        font-size: 13px;
+        font-weight: 500;
+    }
+    ta := TouchArea { clicked => { root.clicked(); } }
+}
+
+/// The remote screen, filling the phone. Tap to click, long-press for a right click, drag to
+/// drag; in scroll mode, dragging scrolls. The keyboard button opens the soft keyboard with a
+/// row of keys phones lack (Esc, Tab, Ctrl, Alt, arrows).
+export component MobileSessionPage inherits Rectangle {
+    in property <string> peer;
+    in property <string> peer-letter;
+    in property <image> frame;
+    in property <bool> has-frame;
+    in property <string> latency;
+    in property <string> fps;
+    in property <bool> view-only;
+    in property <string> route: "Encrypted";
+    in property <[MonitorChoice]> monitors;
+    in property <int> monitor-selected: -1;
+    callback select-monitor(int);
+    callback disconnect();
+    callback pointer-moved(length, length, length, length);
+    callback pointer-button(int, bool);
+    callback scroll(length, length);
+    callback key(string, bool);
+    /// The hidden input's text (see below); the controller resets it when it runs low.
+    in-out property <string> soft-text;
+    /// The hidden input's text after an edit, with the latched modifiers.
+    callback soft-input(string, bool, bool);
+    /// One key from the extra row, as Slint key text, with the latched modifiers.
+    callback soft-key(string, bool, bool);
+
+    property <bool> scroll-mode;
+    property <bool> keyboard-open: soft.has-focus;
+    property <bool> ctrl;
+    property <bool> alt;
+    // Gesture state
+    property <bool> dragging;
+    property <bool> long-pressed;
+    property <length> last-x;
+    property <length> last-y;
+    background: #0a0b0d;
+
+    function send-key(text: string) {
+        root.soft-key(text, root.ctrl, root.alt);
+        root.ctrl = false;
+        root.alt = false;
+    }
+
+    VerticalLayout {
+        // Toolbar
+        Rectangle {
+            height: 52px;
+            background: #121418;
+            Rectangle { y: parent.height - 1px; height: 1px; background: #1f2228; }
+            HorizontalLayout {
+                padding-left: 6px;
+                padding-right: 8px;
+                spacing: 6px;
+                ToolButton { y: (parent.height - self.height) / 2; icon: Icons.x; fg: Theme.danger-text; clicked => { root.disconnect(); } }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    horizontal-stretch: 1;
+                    Text { text: root.peer; color: Theme.text; font-size: 14px; font-weight: 600; overflow: elide; }
+                    HorizontalLayout {
+                        spacing: 5px;
+                        Icon { y: (parent.height - self.height) / 2; d: root.view-only ? Icons.eye : Icons.lock; size: 11px; color: root.view-only ? Theme.warning : Theme.accent; stroke: 2.4px; }
+                        Text {
+                            text: (root.view-only ? "View only · " : "") + root.route + " · " + root.latency + " · " + root.fps + " fps";
+                            color: Theme.subtle;
+                            font-size: 11px;
+                            overflow: elide;
+                        }
+                    }
+                }
+                if !root.view-only: ToolButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.scroll;
+                    on: root.scroll-mode;
+                    clicked => { root.scroll-mode = !root.scroll-mode; }
+                }
+                if !root.view-only: ToolButton {
+                    y: (parent.height - self.height) / 2;
+                    icon: Icons.keyboard;
+                    on: root.keyboard-open;
+                    clicked => {
+                        if (root.keyboard-open) {
+                            soft.clear-focus();
+                            keys.focus();
+                        } else {
+                            soft.focus();
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.monitors.length > 2: Rectangle {
+            height: 46px;
+            background: #121418;
+            Flickable {
+                content-width: Math.max(self.width, picker.width + 24px);
+                picker := MonitorPicker {
+                    x: 12px;
+                    y: (parent.height - self.height) / 2;
+                    choices: root.monitors;
+                    selected: root.monitor-selected;
+                    pick(id) => { root.select-monitor(id); }
+                }
+            }
+        }
+
+        // Remote screen
+        Rectangle {
+            vertical-stretch: 1;
+            Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.frame;
+                image-fit: contain;
+                image-rendering: smooth;
+            }
+            if !root.has-frame: VerticalLayout {
+                alignment: center;
+                spacing: 14px;
+                Spinner { }
+                Text { text: "Waiting for the remote screen…"; color: Theme.muted; font-size: 13px; horizontal-alignment: center; }
+            }
+            // A hardware keyboard types here; Back ends the session.
+            keys := FocusScope {
+                init => { self.focus(); }
+                key-pressed(e) => {
+                    if (e.text == Key.Back) {
+                        root.disconnect();
+                        return accept;
+                    }
+                    root.key(e.text, true);
+                    accept
+                }
+                key-released(e) => {
+                    if (e.text != Key.Back) {
+                        root.key(e.text, false);
+                    }
+                    accept
+                }
+                touch := TouchArea {
+                    enabled: !root.view-only;
+                    pointer-event(e) => {
+                        if (e.kind == PointerEventKind.down) {
+                            root.dragging = false;
+                            root.long-pressed = false;
+                            root.last-x = self.mouse-x;
+                            root.last-y = self.mouse-y;
+                            if (!root.scroll-mode) {
+                                root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height);
+                                long-press.running = true;
+                            }
+                        } else if (e.kind == PointerEventKind.up) {
+                            long-press.running = false;
+                            if (root.scroll-mode || root.long-pressed) {
+                                // Nothing left to do.
+                            } else if (root.dragging) {
+                                root.pointer-button(1, false);
+                            } else {
+                                root.pointer-button(1, true);
+                                root.pointer-button(1, false);
+                            }
+                            root.dragging = false;
+                        } else if (e.kind == PointerEventKind.cancel) {
+                            long-press.running = false;
+                            if (root.dragging) {
+                                root.pointer-button(1, false);
+                            }
+                            root.dragging = false;
+                        }
+                    }
+                    moved => {
+                        if (root.scroll-mode) {
+                            // Content follows the finger, like scrolling a page on the phone.
+                            root.scroll((self.mouse-x - root.last-x) * 1.5, (self.mouse-y - root.last-y) * 1.5);
+                            root.last-x = self.mouse-x;
+                            root.last-y = self.mouse-y;
+                        } else if (root.dragging) {
+                            root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height);
+                        } else if (!root.long-pressed && (abs(self.mouse-x - self.pressed-x) > 10px || abs(self.mouse-y - self.pressed-y) > 10px)) {
+                            long-press.running = false;
+                            root.dragging = true;
+                            root.pointer-button(1, true);
+                            root.pointer-moved(self.mouse-x, self.mouse-y, self.width, self.height);
+                        }
+                    }
+                }
+            }
+            long-press := Timer {
+                interval: 550ms;
+                running: false;
+                triggered => {
+                    self.running = false;
+                    root.long-pressed = true;
+                    root.pointer-button(3, true);
+                    root.pointer-button(3, false);
+                }
+            }
+            // Scroll mode hint
+            if root.scroll-mode: Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: 12px;
+                height: 28px;
+                width: hint.preferred-width + 24px;
+                border-radius: 14px;
+                background: #121418e0;
+                border-width: 1px;
+                border-color: Theme.border-strong;
+                hint := Text { text: "Drag to scroll"; color: Theme.text-2; font-size: 12px; }
+            }
+        }
+
+        // Keys phones lack, above the soft keyboard
+        if root.keyboard-open: Rectangle {
+            height: 50px;
+            background: #121418;
+            Rectangle { y: 0; height: 1px; background: #1f2228; }
+            Flickable {
+                content-width: Math.max(self.width, key-row.preferred-width);
+                key-row := HorizontalLayout {
+                    padding: 7px;
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    spacing: 6px;
+                    alignment: start;
+                    KeyCap { label: "Esc"; clicked => { root.send-key(Key.Escape); } }
+                    KeyCap { label: "Tab"; clicked => { root.send-key(Key.Tab); } }
+                    KeyCap { label: "Ctrl"; on: root.ctrl; clicked => { root.ctrl = !root.ctrl; } }
+                    KeyCap { label: "Alt"; on: root.alt; clicked => { root.alt = !root.alt; } }
+                    KeyCap { label: "←"; clicked => { root.send-key(Key.LeftArrow); } }
+                    KeyCap { label: "↑"; clicked => { root.send-key(Key.UpArrow); } }
+                    KeyCap { label: "↓"; clicked => { root.send-key(Key.DownArrow); } }
+                    KeyCap { label: "→"; clicked => { root.send-key(Key.RightArrow); } }
+                    KeyCap { label: "Del"; clicked => { root.send-key(Key.Delete); } }
+                    KeyCap { label: "Home"; clicked => { root.send-key(Key.Home); } }
+                    KeyCap { label: "End"; clicked => { root.send-key(Key.End); } }
+                    KeyCap { label: "Super"; clicked => { root.send-key(Key.Meta); } }
+                }
+            }
+        }
+    }
+
+    // Receives the soft keyboard's text. The controller compares each edit with the previous text
+    // and types the difference, so autocorrect and word composition come out right too. The
+    // text starts as padding, so that Backspace on an "empty" field still is an edit.
+    // Off-screen, so neither it nor its cursor handle is ever visible.
+    soft := TextInput {
+        x: -100px;
+        y: -100px;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        text <=> root.soft-text;
+        single-line: true;
+        input-method-hints: { capitalization: CapitalizationMode.none, auto-correct: false, auto-complete: false };
+        edited => {
+            root.soft-input(self.text, root.ctrl, root.alt);
+            root.ctrl = false;
+            root.alt = false;
+        }
+        accepted => { root.send-key(Key.Return); }
+        key-pressed(e) => {
+            if (e.text == Key.Back) {
+                self.clear-focus();
+                keys.focus();
+                return accept;
+            }
+            reject
+        }
+    }
+}

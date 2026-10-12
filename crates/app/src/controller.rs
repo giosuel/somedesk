@@ -32,6 +32,9 @@ use tokio::task::JoinHandle;
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
 /// Slint reports one mouse-wheel notch as 60 logical pixels.
 const WHEEL_STEP: f32 = 60.0;
+/// What the phone's hidden keyboard input starts with, so Backspace always has something to
+/// delete (see `soft_input`).
+const SOFT_PAD: &str = "                ";
 
 #[derive(Serialize, Deserialize)]
 struct Settings {
@@ -95,6 +98,8 @@ struct State {
     viewer_task: Option<JoinHandle<()>>,
     viewer_input: Option<mpsc::UnboundedSender<SessionMsg>>,
     scroll_acc: (f32, f32),
+    /// The phone's hidden keyboard input as of the last edit.
+    soft_text: String,
     host_stop: Option<watch::Sender<bool>>,
     /// (accepted, let this device connect without asking from now on)
     incoming_answer: Option<oneshot::Sender<(bool, bool)>>,
@@ -150,8 +155,19 @@ fn ago(secs: i64) -> String {
     }
 }
 
+static DOWNLOAD_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Overrides where received files go (Android, which has no home directory).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn set_download_dir(dir: PathBuf) {
+    let _ = DOWNLOAD_DIR.set(dir);
+}
+
 /// Where received files go: `~/Downloads/SomeDesk`.
 fn download_dir() -> PathBuf {
+    if let Some(dir) = DOWNLOAD_DIR.get() {
+        return dir.clone();
+    }
     dirs::download_dir()
         .or_else(|| dirs::home_dir().map(|h| h.join("Downloads")))
         .unwrap_or_else(std::env::temp_dir)
@@ -189,6 +205,16 @@ fn letter(name: &str) -> String {
 
 /// This computer's name, as a default device name.
 fn hostname() -> String {
+    #[cfg(target_os = "android")]
+    if let Some(model) = std::process::Command::new("getprop")
+        .arg("ro.product.model")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .filter(|m| !m.is_empty())
+    {
+        return model;
+    }
     std::env::var("COMPUTERNAME") // Windows
         .ok()
         .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
@@ -206,6 +232,7 @@ fn hostname() -> String {
 }
 
 /// Un-minimizes and raises the window, so an incoming request is never hidden behind other windows.
+#[cfg(not(target_os = "android"))]
 fn bring_to_front(ui: &AppWindow) {
     use slint::winit_030::WinitWindowAccessor;
     ui.window().set_minimized(false);
@@ -214,6 +241,9 @@ fn bring_to_front(ui: &AppWindow) {
         w.request_user_attention(Some(slint::winit_030::winit::window::UserAttentionType::Critical));
     });
 }
+
+#[cfg(target_os = "android")]
+fn bring_to_front(_: &AppWindow) {}
 
 fn device_label(cert: &DeviceCert) -> String {
     format!("{} · {}", cert.username, cert.device_name)
@@ -348,7 +378,8 @@ impl Controller {
             .default_server
             .clone()
             .or_else(|| (!settings.last_server.is_empty()).then(|| settings.last_server.clone()))
-            .unwrap_or_else(|| "localhost".into());
+            // A phone has no server of its own to default to.
+            .unwrap_or_else(|| if cfg!(target_os = "android") { String::new() } else { "localhost".into() });
         let auto_accept = settings.auto_accept_own_devices;
         let share_clipboard = settings.share_clipboard;
         let allow_direct = settings.allow_direct;
@@ -528,6 +559,10 @@ impl Controller {
                 c.send_input(SessionMsg::Key { keysym, down });
             }
         });
+        let c = self.clone();
+        ui.on_soft_input(move |text, ctrl, alt| c.soft_input(&text, ctrl, alt));
+        let c = self.clone();
+        ui.on_soft_key(move |text, ctrl, alt| c.type_keys(&text, ctrl, alt));
     }
 
     // ------------------------------------------------------------------ sign in / out
@@ -851,6 +886,10 @@ impl Controller {
             }
         };
         let peer = ch.peer.clone();
+        if !somedesk_platform::can_share_screen() {
+            host::reject(ch, "This device can connect to other computers, but cannot share its own screen.").await;
+            return;
+        }
         if self.0.busy.swap(true, Ordering::SeqCst) {
             host::reject(ch, "The computer is busy with another session.").await;
             return;
@@ -1071,6 +1110,7 @@ impl Controller {
                 }
                 let recent = if same_account { remembered.device_name.clone() } else { peer_label.clone() };
                 this.remember_recent(device_id, recent);
+                this.0.state.lock().unwrap().soft_text = SOFT_PAD.to_owned();
                 let (label, id, fp) = (peer_label.clone(), peer_id.clone(), peer_fp.clone());
                 let peer_letter = letter(&remembered.username);
                 this.ui(move |ui| {
@@ -1085,6 +1125,7 @@ impl Controller {
                     ui.set_session_monitor_selected(-1);
                     ui.set_latency("–".into());
                     ui.set_fps("–".into());
+                    ui.set_session_soft_text(SOFT_PAD.into());
                     ui.set_outgoing_visible(false);
                     ui.set_page(Page::Session);
                 });
@@ -1173,15 +1214,23 @@ impl Controller {
         let Some(files) = self.0.state.lock().unwrap().files.clone() else {
             return;
         };
-        let this = self.clone();
-        self.0.rt.spawn(async move {
-            let picked = rfd::AsyncFileDialog::new().set_title("Send files").pick_files().await;
-            for f in picked.unwrap_or_default() {
-                if let Err(e) = files.send_file(f.path()) {
-                    this.toast(format!("Cannot send {}: {e}", f.file_name()), true);
+        #[cfg(not(target_os = "android"))]
+        {
+            let this = self.clone();
+            self.0.rt.spawn(async move {
+                let picked = rfd::AsyncFileDialog::new().set_title("Send files").pick_files().await;
+                for f in picked.unwrap_or_default() {
+                    if let Err(e) = files.send_file(f.path()) {
+                        this.toast(format!("Cannot send {}: {e}", f.file_name()), true);
+                    }
                 }
-            }
-        });
+            });
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = files;
+            self.toast("Sending files from the phone is not supported yet", true);
+        }
     }
 
     fn on_transfer(&self, ev: TransferEvent, peer: &str) {
@@ -1329,6 +1378,50 @@ impl Controller {
         });
     }
 
+    /// The phone's keyboard changed the hidden input from what it was to `text`: sends a
+    /// Backspace for every character that went away and types the new ones.
+    fn soft_input(&self, text: &str, ctrl: bool, alt: bool) {
+        let previous = {
+            let mut st = self.0.state.lock().unwrap();
+            let previous = std::mem::replace(&mut st.soft_text, text.to_owned());
+            if previous.is_empty() {
+                SOFT_PAD.to_owned()
+            } else {
+                previous
+            }
+        };
+        let (removed, added) = text_diff(&previous, text);
+        self.type_keys(&"\u{8}".repeat(removed), false, false);
+        self.type_keys(&added, ctrl, alt);
+        // Refill the padding before it runs out, and don't let the text grow forever.
+        let len = text.chars().count();
+        if !(4..=200).contains(&len) {
+            self.0.state.lock().unwrap().soft_text = SOFT_PAD.to_owned();
+            self.ui(|ui| ui.set_session_soft_text(SOFT_PAD.into()));
+        }
+    }
+
+    /// Presses and releases the key for each character of `text` (Slint key text), with Ctrl
+    /// and/or Alt held down around each one.
+    fn type_keys(&self, text: &str, ctrl: bool, alt: bool) {
+        const CONTROL_L: u32 = 0xffe3;
+        const ALT_L: u32 = 0xffe9;
+        let mods: Vec<u32> = [(ctrl, CONTROL_L), (alt, ALT_L)].into_iter().filter(|m| m.0).map(|m| m.1).collect();
+        for c in text.chars() {
+            let Some(keysym) = keysym_for(c.encode_utf8(&mut [0; 4])) else {
+                continue;
+            };
+            for &m in &mods {
+                self.send_input(SessionMsg::Key { keysym: m, down: true });
+            }
+            self.send_input(SessionMsg::Key { keysym, down: true });
+            self.send_input(SessionMsg::Key { keysym, down: false });
+            for &m in mods.iter().rev() {
+                self.send_input(SessionMsg::Key { keysym: m, down: false });
+            }
+        }
+    }
+
     fn send_input(&self, msg: SessionMsg) {
         if let Some(tx) = &self.0.state.lock().unwrap().viewer_input {
             let _ = tx.send(msg);
@@ -1362,6 +1455,13 @@ impl Controller {
     }
 }
 
+/// How `new` differs from `old` at the end: the number of characters removed from `old` after
+/// their common beginning, and what `new` has there instead.
+fn text_diff(old: &str, new: &str) -> (usize, String) {
+    let common = old.chars().zip(new.chars()).take_while(|(a, b)| a == b).count();
+    (old.chars().count() - common, new.chars().skip(common).collect())
+}
+
 /// Maps viewport coordinates to `0..=POINTER_MAX`, or `None` outside the displayed image.
 fn map_pointer(x: f32, y: f32, view_w: f32, view_h: f32, frame_w: f32, frame_h: f32) -> Option<(u16, u16)> {
     if frame_w <= 0.0 || frame_h <= 0.0 || view_w <= 0.0 || view_h <= 0.0 {
@@ -1380,7 +1480,16 @@ fn map_pointer(x: f32, y: f32, view_w: f32, view_h: f32, frame_w: f32, frame_h: 
 
 #[cfg(test)]
 mod tests {
-    use super::map_pointer;
+    use super::{map_pointer, text_diff};
+
+    #[test]
+    fn soft_keyboard_edits() {
+        assert_eq!(text_diff("  ", "  a"), (0, "a".into()));
+        assert_eq!(text_diff("  ab", "  a"), (1, "".into()));
+        // Autocorrect replaces a word.
+        assert_eq!(text_diff("  teh", "  the "), (2, "he ".into()));
+        assert_eq!(text_diff("  ä", "  äö"), (0, "ö".into()));
+    }
 
     #[test]
     fn pointer_mapping_handles_letterboxing() {

@@ -83,7 +83,7 @@ Start it with Docker Compose on a machine both computers can reach (UDP 21116).
 
 ### Install the app
 
-Get it for Linux, Windows or macOS from the [releases](https://github.com/giosuel/somedesk/releases), and create an account on your server.
+Get it for Linux, Windows, macOS or Android from the [releases](https://github.com/giosuel/somedesk/releases), and create an account on your server.
 
 </div>
 <div class="sd-step" markdown>

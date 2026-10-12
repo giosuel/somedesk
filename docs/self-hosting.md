@@ -33,6 +33,7 @@ target/release/somedesk --server your.server.example
 | Linux client, any distribution | `packaging/linux/build-appimage.sh` (bundles its libraries except glibc, graphics and PipeWire; build on an old distribution such as Debian 12) | `.AppImage` |
 | Windows client | `packaging/windows/build-zip.sh` (cross-built with MinGW; icon embedded) | `.zip` with `somedesk.exe` and runtime DLLs |
 | macOS client | `packaging/macos/make-app.sh` on a Mac (unsigned) | `SomeDesk.app` + `.zip` |
+| Android app | `packaging/android/build-apk.sh` (needs the Android SDK and NDK; see the script) | `.apk` for phones and emulators |
 
 The `.deb`s depend on the glibc of the machine that built them: build release packages on the
 oldest distribution you want to support. Install `cargo-deb` with `cargo install cargo-deb`.

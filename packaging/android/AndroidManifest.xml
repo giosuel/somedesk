@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- packaging/android/build-apk.sh fills in the version. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ch.giosuel.somedesk"
+    android:versionCode="@VERSION_CODE@"
+    android:versionName="@VERSION@">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- No Java code of our own: Slint loads its small helper class from the native library. -->
+    <application
+        android:label="SomeDesk"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/SomeDesk"
+        android:hasCode="false"
+        android:extractNativeLibs="true"
+        android:allowBackup="false">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data android:name="android.app.lib_name" android:value="somedesk" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
