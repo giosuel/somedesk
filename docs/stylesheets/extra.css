@@ -157,6 +157,20 @@
 }
 .md-typeset .sd-cta h2 { margin-top: 0; }
 
+/* "Free, forever" band on the landing page */
+.sd-free {
+  text-align: center; margin: 2.6rem 0 0; padding: 1.8rem 1.2rem 1.6rem;
+  border: 1px solid rgba(125, 211, 192, 0.35); border-radius: 18px;
+  background: radial-gradient(90% 140% at 50% 0%, rgba(125, 211, 192, 0.12), transparent 70%), var(--sd-surface);
+}
+.md-typeset .sd-free h2 { margin: 0 0 0.5rem; }
+.md-typeset .sd-free p { color: var(--sd-muted); max-width: 38rem; margin: 0 auto; }
+.md-typeset .sd-free ul { display: flex; flex-wrap: wrap; gap: 0.45rem; justify-content: center; list-style: none; padding: 0; margin: 1.1rem 0 0.9rem; }
+.md-typeset .sd-free li {
+  margin: 0; padding: 0.2rem 0.75rem; font-size: 0.72rem; color: var(--sd-text);
+  border: 1px solid var(--sd-border-strong); border-radius: 999px; background: var(--sd-surface-2);
+}
+
 /* ---------------------------------------------------------------- Desi, the mascot */
 
 .sd-mascot { display: block; height: auto; pointer-events: none; }

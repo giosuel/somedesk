@@ -10,8 +10,8 @@ VERSION=$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,
 OUT="target/dist/SomeDesk-$VERSION-windows-x64"
 rm -rf "$OUT" "$OUT.zip"
 mkdir -p "$OUT"
-cp "target/$TARGET/release/somedesk.exe" "$OUT/"
-x86_64-w64-mingw32-strip "$OUT/somedesk.exe"
+cp "target/$TARGET/release/somedesk.exe" "target/$TARGET/release/somedesk-agent.exe" "$OUT/"
+x86_64-w64-mingw32-strip "$OUT/somedesk.exe" "$OUT/somedesk-agent.exe"
 # The video codec links the C++ runtime dynamically; ship it (and what it needs) alongside.
 for dll in libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
     path=$(x86_64-w64-mingw32-g++ -print-file-name="$dll")

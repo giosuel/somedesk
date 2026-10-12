@@ -1,0 +1,244 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon, Field, GhostButton, PrimaryButton, Card, SectionTitle, Switch, Avatar, Divider, Pill } from "widgets.slint";
+
+export component SettingRow inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> enabled: true;
+    in-out property <bool> checked;
+    callback toggled(bool);
+    spacing: 16px;
+    VerticalLayout {
+        alignment: center;
+        spacing: 3px;
+        Text { text: root.title; color: root.enabled ? Theme.text : Theme.subtle; font-size: 14px; font-weight: 500; }
+        Text { text: root.detail; color: Theme.subtle; font-size: 12px; wrap: word-wrap; }
+    }
+    Switch {
+        y: (parent.height - self.height) / 2;
+        opacity: root.enabled ? 1 : 0.4;
+        checked <=> root.checked;
+        toggled(v) => {
+            if (root.enabled) {
+                root.toggled(v);
+            } else {
+                self.checked = !v;
+            }
+        }
+    }
+}
+
+/// A headline with a status pill, a text and buttons: the unattended-access and two-factor
+/// sections.
+component StatusBlock inherits VerticalLayout {
+    in property <string> title;
+    in property <bool> on;
+    in property <string> detail;
+    spacing: 8px;
+    HorizontalLayout {
+        spacing: 10px;
+        Text { text: root.title; color: Theme.text; font-size: 14px; font-weight: 500; vertical-alignment: center; }
+        Pill {
+            y: (parent.height - self.height) / 2;
+            text: root.on ? "On" : "Off";
+            fg: root.on ? Theme.success : Theme.muted;
+            bg: root.on ? Theme.accent-soft : Theme.raised;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        @children
+    }
+    Text { text: root.detail; color: Theme.subtle; font-size: 12px; wrap: word-wrap; }
+}
+
+export component SettingsView inherits VerticalLayout {
+    /// The phone: it can't share its screen, so there's nothing to set up for incoming sessions.
+    in property <bool> can-host: true;
+    in property <bool> mobile;
+    in-out property <string> device-name;
+    in property <string> my-id;
+    in property <string> fingerprint;
+    in property <string> server-label;
+    in property <bool> unattended;
+    in property <bool> signed-in;
+    in property <string> username;
+    in property <string> user-letter;
+    in property <bool> account-2fa;
+    in-out property <bool> own-devices;
+    in-out property <bool> share-clipboard;
+    in-out property <bool> allow-direct;
+    in-out property <bool> run-in-background;
+    in-out property <bool> start-at-login;
+    /// What the tour points at ("" when it is not running).
+    in property <string> tour-target;
+    callback rename-device(string);
+    callback unattended-setup();
+    callback unattended-disable();
+    callback own-devices-changed(bool);
+    callback share-clipboard-changed(bool);
+    callback allow-direct-changed(bool);
+    callback run-in-background-changed(bool);
+    callback start-at-login-changed(bool);
+    callback sign-in();
+    callback create-account();
+    callback sign-out();
+    callback totp-setup();
+    callback totp-disable();
+    callback start-tour();
+    padding: root.mobile ? 16px : 32px;
+    padding-left: root.mobile ? 16px : 36px;
+    padding-right: root.mobile ? 16px : 36px;
+    spacing: root.mobile ? 14px : 20px;
+    alignment: start;
+
+    if !root.mobile: Text { text: "Settings"; color: Theme.text; font-size: 28px; font-weight: 600; letter-spacing: -0.6px; }
+
+    // This computer
+    Card {
+        VerticalLayout {
+            padding: 22px;
+            spacing: 14px;
+            SectionTitle { text: root.mobile ? "This phone" : "This computer"; }
+            HorizontalLayout {
+                spacing: 10px;
+                Field { horizontal-stretch: 1; label: "Name"; text <=> root.device-name; }
+                GhostButton { y: parent.height - self.height; button-height: 44px; text: "Rename"; clicked => { root.rename-device(root.device-name); } }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Text { text: "ID"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.my-id; color: Theme.text-2; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Icon { y: (parent.height - self.height) / 2; d: Icons.shield; size: 16px; color: Theme.accent; }
+                Text { text: "Fingerprint"; color: Theme.muted; font-size: 13px; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.fingerprint; color: Theme.text-2; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
+            }
+            Text { text: root.server-label; color: Theme.subtle; font-size: 12px; }
+        }
+    }
+
+    // Who may get in
+    if root.can-host: Card {
+        highlighted: root.tour-target == "unattended";
+        VerticalLayout {
+            padding: 22px;
+            spacing: 16px;
+            SectionTitle { text: "Getting in without someone here"; }
+            Text {
+                text: "Normally someone at this computer accepts every connection. These let people in without asking. A banner always shows while someone is connected.";
+                color: Theme.muted;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            StatusBlock {
+                title: "Unattended access";
+                on: root.unattended;
+                detail: "With this computer's own password and a code from your authenticator app. Both are checked here, never by the server.";
+                if !root.unattended: PrimaryButton { height: 34px; text: "Set up"; clicked => { root.unattended-setup(); } }
+                if root.unattended: GhostButton { button-height: 34px; text: "Change"; clicked => { root.unattended-setup(); } }
+                if root.unattended: GhostButton { button-height: 34px; text: "Turn off"; fg: Theme.danger-text; clicked => { root.unattended-disable(); } }
+            }
+            Divider { }
+            SettingRow {
+                title: "My own devices";
+                enabled: root.signed-in && root.account-2fa;
+                detail: !root.signed-in ? "Sign in to let your other devices reach this one without asking."
+                    : !root.account-2fa ? "Turn on two-factor authentication for your account first."
+                    : "Devices signed in to " + root.username + " connect without asking. Off by default.";
+                checked <=> root.own-devices;
+                toggled(v) => { root.own-devices-changed(v); }
+            }
+        }
+    }
+
+    // Account
+    Card {
+        highlighted: root.tour-target == "account";
+        VerticalLayout {
+            padding: 22px;
+            spacing: 14px;
+            SectionTitle { text: "Account"; }
+            if !root.signed-in: Text {
+                text: "Optional. An account syncs your address book (end-to-end encrypted) and lets your own devices find and reach each other. Everything else works without one.";
+                color: Theme.muted;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            if !root.signed-in: HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+                PrimaryButton { height: 38px; text: "Sign in"; clicked => { root.sign-in(); } }
+                GhostButton { button-height: 38px; text: "Create an account"; clicked => { root.create-account(); } }
+            }
+            if root.signed-in: HorizontalLayout {
+                spacing: 14px;
+                Avatar { y: (parent.height - self.height) / 2; letter: root.user-letter; size: 40px; }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 3px;
+                    Text { text: root.username; color: Theme.text; font-size: 15px; font-weight: 500; }
+                    Text { text: "Signed in on this " + (root.mobile ? "phone" : "computer"); color: Theme.subtle; font-size: 12px; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                GhostButton {
+                    y: (parent.height - self.height) / 2;
+                    text: "Sign out";
+                    icon: Icons.logout;
+                    clicked => { root.sign-out(); }
+                }
+            }
+            if root.signed-in: Divider { }
+            if root.signed-in: StatusBlock {
+                title: "Two-factor authentication";
+                on: root.account-2fa;
+                detail: "Signing in also takes a code from your authenticator app.";
+                if !root.account-2fa: PrimaryButton { height: 34px; text: "Turn on"; clicked => { root.totp-setup(); } }
+                if root.account-2fa: GhostButton { button-height: 34px; text: "Turn off"; fg: Theme.danger-text; clicked => { root.totp-disable(); } }
+            }
+        }
+    }
+
+    // Sessions
+    Card {
+        VerticalLayout {
+            padding: 22px;
+            spacing: 18px;
+            SectionTitle { text: "Sessions"; }
+            SettingRow {
+                title: "Share clipboard";
+                detail: "Copy on one computer, paste on the other during a session.";
+                checked <=> root.share-clipboard;
+                toggled(v) => { root.share-clipboard-changed(v); }
+            }
+            Divider { }
+            SettingRow {
+                title: "Direct connections";
+                detail: "Connect straight to the other computer when possible, for lower latency. This shows your IP address to the other side; when off, sessions always go through the relay.";
+                checked <=> root.allow-direct;
+                toggled(v) => { root.allow-direct-changed(v); }
+            }
+            if root.can-host: Divider { }
+            if root.can-host: SettingRow {
+                title: "Keep running in the background";
+                detail: "Closing the window leaves SomeDesk in the tray, so this computer stays reachable.";
+                checked <=> root.run-in-background;
+                toggled(v) => { root.run-in-background-changed(v); }
+            }
+            if root.can-host: Divider { }
+            if root.can-host: SettingRow {
+                title: "Start when I log in";
+                detail: "Opens SomeDesk in the background after you log in.";
+                checked <=> root.start-at-login;
+                toggled(v) => { root.start-at-login-changed(v); }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: start;
+        GhostButton { text: "Take the tour"; icon: Icons.help; clicked => { root.start-tour(); } }
+    }
+}

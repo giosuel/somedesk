@@ -11,6 +11,8 @@ APP=target/dist/SomeDesk.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/release/somedesk "$APP/Contents/MacOS/SomeDesk"
+# For machines an organisation manages: SomeDesk.app/Contents/MacOS/somedesk-agent enroll …
+cp target/release/somedesk-agent "$APP/Contents/MacOS/somedesk-agent"
 
 ICONSET=target/dist/SomeDesk.iconset
 rm -rf "$ICONSET"; mkdir -p "$ICONSET"

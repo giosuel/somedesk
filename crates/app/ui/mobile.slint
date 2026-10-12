@@ -4,29 +4,24 @@
 
 import { Theme, Icons } from "theme.slint";
 import { Logo, Icon, Field, PrimaryButton, GhostButton, LinkText, Card, SectionTitle, Switch, Avatar, Divider, Spinner } from "widgets.slint";
-import { LoginForm } from "login.slint";
-import { DeviceItem, ContactItem, RecentItem, HomeView } from "home.slint";
+import { SetupForm } from "login.slint";
+import { DeviceItem, RecentItem, HomeView, BookItem } from "home.slint";
+import { BookList } from "book.slint";
+import { SettingsView } from "settings.slint";
 import { MonitorChoice, MonitorPicker } from "session.slint";
 
-// ---------------------------------------------------------------------------------- sign in
+// ---------------------------------------------------------------------------------- first start
 
-export component MobileLoginPage inherits Rectangle {
+export component MobileSetupPage inherits Rectangle {
     in property <string> error;
     in property <bool> busy;
     in-out property <string> server;
-    in-out property <string> username;
-    in-out property <string> password;
-    in-out property <string> password2;
-    in-out property <string> device-name;
-    in-out property <bool> create-mode;
-    in-out property <bool> recover-mode;
-    in-out property <string> recovery-key;
+    in-out property <string> name;
     callback submit();
     background: Theme.bg;
 
     Flickable {
         content-height: Math.max(self.height, content.preferred-height);
-
         content-width: self.width;
         content := VerticalLayout {
             padding: 24px;
@@ -44,25 +39,18 @@ export component MobileLoginPage inherits Rectangle {
                     letter-spacing: -0.9px;
                 }
                 Text {
-                    text: "Remote access you host yourself, encrypted end to end.";
+                    text: "Remote access you host yourself, encrypted end to end. Free, for good.";
                     color: Theme.muted;
                     font-size: 15px;
                     wrap: word-wrap;
                 }
             }
-            LoginForm {
+            SetupForm {
+                mobile: true;
                 server <=> root.server;
-                username <=> root.username;
-                password <=> root.password;
-                password2 <=> root.password2;
-                device-name <=> root.device-name;
-                create-mode <=> root.create-mode;
-                recover-mode <=> root.recover-mode;
-                recovery-key <=> root.recovery-key;
+                name <=> root.name;
                 error: root.error;
                 busy: root.busy;
-                device-label: "Name of this phone";
-                device-placeholder: "e.g. my-phone";
                 submit => { root.submit(); }
             }
         }
@@ -76,6 +64,7 @@ component TabButton inherits Rectangle {
     in property <string> icon;
     in property <bool> active;
     callback clicked;
+    horizontal-stretch: 1;
     VerticalLayout {
         alignment: center;
         spacing: 4px;
@@ -86,15 +75,14 @@ component TabButton inherits Rectangle {
                 height: 28px;
                 border-radius: 14px;
                 background: root.active ? Theme.accent-soft : transparent;
-                animate background { duration: 150ms; }
+                Icon { d: root.icon; size: 19px; color: root.active ? Theme.accent : Theme.subtle; }
             }
-            Icon { d: root.icon; size: 19px; color: root.active ? Theme.accent : Theme.subtle; }
         }
         Text {
             text: root.text;
             color: root.active ? Theme.text : Theme.subtle;
             font-size: 11px;
-            font-weight: root.active ? 600 : 400;
+            font-weight: root.active ? 500 : 400;
             horizontal-alignment: center;
         }
     }
@@ -105,111 +93,38 @@ component MobileDeviceRow inherits Rectangle {
     in property <DeviceItem> device;
     callback connect(string);
     height: 64px;
+    background: row-ta.pressed ? Theme.raised : transparent;
+    row-ta := TouchArea { clicked => { if (!root.device.is-self && root.device.online) { root.connect(root.device.id); } } }
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 12px;
-        spacing: 12px;
+        padding-left: 18px;
+        padding-right: 18px;
+        spacing: 14px;
         Rectangle {
             y: (parent.height - self.height) / 2;
             width: 38px;
             height: 38px;
             border-radius: 10px;
             background: root.device.online ? Theme.accent-soft : #1f2228;
-            Icon {
-                d: root.device.is-self ? Icons.phone : Icons.monitor;
-                size: 18px;
-                stroke: 1.8px;
-                color: root.device.online ? Theme.accent : Theme.subtle;
-            }
+            Icon { d: Icons.monitor; size: 18px; stroke: 1.8px; color: root.device.online ? Theme.accent : Theme.subtle; }
         }
         VerticalLayout {
             alignment: center;
             spacing: 2px;
             horizontal-stretch: 1;
             Text {
-                text: root.device.name;
+                text: root.device.name + (root.device.is-self ? " · this phone" : "");
                 color: root.device.online || root.device.is-self ? Theme.text : #a3a9b4;
                 font-size: 15px;
                 font-weight: 500;
                 overflow: elide;
             }
             Text {
-                text: root.device.is-self ? "This phone" : (root.device.online ? "Online" : "Offline") + "  ·  " + root.device.id-label;
-                color: root.device.online && !root.device.is-self ? Theme.accent : Theme.subtle;
+                text: (root.device.online ? "Online" : "Offline") + " · " + root.device.id-label;
+                color: root.device.online ? Theme.accent : Theme.subtle;
                 font-size: 12px;
-                overflow: elide;
             }
         }
-        if !root.device.is-self: GhostButton {
-            y: (parent.height - self.height) / 2;
-            button-height: 36px;
-            text: "Connect";
-            enabled: root.device.online;
-            clicked => { root.connect(root.device.id); }
-        }
-    }
-}
-
-component MobileContactRow inherits Rectangle {
-    in property <ContactItem> contact;
-    callback revoke(string);
-    callback forget(string);
-    height: body.preferred-height;
-    body := VerticalLayout {
-        padding: 14px;
-        spacing: 10px;
-        HorizontalLayout {
-            spacing: 12px;
-            Avatar { y: (parent.height - self.height) / 2; letter: root.contact.letter; size: 38px; }
-            VerticalLayout {
-                alignment: center;
-                spacing: 2px;
-                Text { text: root.contact.username; color: Theme.text; font-size: 15px; font-weight: 500; }
-                Text { text: root.contact.fingerprint; color: Theme.text-2; font-size: 12px; font-family: Theme.mono; }
-                Text { text: root.contact.detail; color: Theme.subtle; font-size: 12px; }
-            }
-        }
-        if root.contact.unattended != "": Text {
-            text: "Can connect without asking: " + root.contact.unattended;
-            color: Theme.warning;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
-            spacing: 8px;
-            alignment: end;
-            if root.contact.unattended != "": GhostButton {
-                button-height: 34px;
-                text: "Revoke access";
-                clicked => { root.revoke(root.contact.username); }
-            }
-            GhostButton {
-                button-height: 34px;
-                text: "Forget";
-                fg: Theme.muted;
-                clicked => { root.forget(root.contact.username); }
-            }
-        }
-    }
-}
-
-component MobileSetting inherits HorizontalLayout {
-    in property <string> title;
-    in property <string> detail;
-    in-out property <bool> checked;
-    callback toggled(bool);
-    spacing: 14px;
-    VerticalLayout {
-        alignment: center;
-        spacing: 3px;
-        horizontal-stretch: 1;
-        Text { text: root.title; color: Theme.text; font-size: 15px; font-weight: 500; }
-        Text { text: root.detail; color: Theme.subtle; font-size: 12px; wrap: word-wrap; }
-    }
-    Switch {
-        y: (parent.height - self.height) / 2;
-        checked <=> root.checked;
-        toggled(v) => { root.toggled(v); }
+        if !root.device.is-self && root.device.online: Icon { y: (parent.height - self.height) / 2; d: Icons.connect; size: 18px; color: Theme.accent; }
     }
 }
 
@@ -217,13 +132,14 @@ component Heading inherits VerticalLayout {
     in property <string> title;
     in property <string> subtitle;
     spacing: 4px;
-    Text { text: root.title; color: Theme.text; font-size: 24px; font-weight: 600; letter-spacing: -0.5px; wrap: word-wrap; }
+    Text { text: root.title; color: Theme.text; font-size: 24px; font-weight: 600; letter-spacing: -0.5px; }
     if root.subtitle != "": Text { text: root.subtitle; color: Theme.muted; font-size: 14px; wrap: word-wrap; }
 }
 
 export component MobileHomePage inherits Rectangle {
     in property <string> my-id;
-    in property <string> my-device-name;
+    in-out property <string> my-device-name;
+    in property <bool> signed-in;
     in property <string> username;
     in property <string> user-letter;
     in property <string> greeting;
@@ -232,24 +148,32 @@ export component MobileHomePage inherits Rectangle {
     in property <bool> online;
     in property <string> status-text;
     in property <[DeviceItem]> devices;
-    in property <[ContactItem]> contacts;
+    in property <[BookItem]> book;
     in property <[RecentItem]> recents;
     in property <bool> connect-busy;
     in-out property <string> connect-id;
+    in property <bool> account-2fa;
     in-out property <bool> share-clipboard;
     in-out property <bool> allow-direct;
     in-out property <HomeView> view: HomeView.connect;
     /// What the tour points at ("" when it is not running).
     in property <string> tour-target;
     callback start-tour();
-    /// The soft keyboard is up: the navigation makes way for the content.
+    /// The soft keyboard is open: hide the navigation so the content has the room.
     in property <bool> keyboard-open;
     callback allow-direct-changed(bool);
     callback connect(string);
+    callback connect-with-password(string);
     callback share-clipboard-changed(bool);
+    callback rename-device(string);
+    callback sign-in();
+    callback create-account();
     callback sign-out();
-    callback revoke-contact(string);
-    callback forget-contact(string);
+    callback totp-setup();
+    callback totp-disable();
+    callback book-edit(string);
+    callback book-remove(string);
+    callback book-add();
     background: Theme.bg;
 
     // Back goes to the first tab, and leaves the app from there.
@@ -304,7 +228,6 @@ export component MobileHomePage inherits Rectangle {
 
             if root.view == HomeView.connect: Flickable {
                 content-height: Math.max(self.height, connect-content.preferred-height);
-
                 content-width: self.width;
                 connect-content := VerticalLayout {
                     padding: 18px;
@@ -335,6 +258,12 @@ export component MobileHomePage inherits Rectangle {
                                 enabled: root.online;
                                 clicked => { root.connect(root.connect-id); }
                             }
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: 6px;
+                                Text { text: "Nobody there?"; color: Theme.subtle; font-size: 13px; vertical-alignment: center; }
+                                LinkText { text: "Use its password"; font-size: 13px; clicked => { root.connect-with-password(root.connect-id); } }
+                            }
                             if root.recents.length > 0: VerticalLayout {
                                 spacing: 2px;
                                 Text { text: "Recent"; color: Theme.subtle; font-size: 12px; }
@@ -354,8 +283,7 @@ export component MobileHomePage inherits Rectangle {
                             }
                         }
                     }
-                    Card {
-                        highlighted: root.tour-target == "devices";
+                    if root.signed-in && root.devices.length > 1: Card {
                         VerticalLayout {
                             padding-top: 16px;
                             padding-bottom: 6px;
@@ -364,9 +292,8 @@ export component MobileHomePage inherits Rectangle {
                                 padding-right: 18px;
                                 padding-bottom: 4px;
                                 spacing: 8px;
-                                SectionTitle { text: "Your devices"; }
+                                SectionTitle { text: "My devices"; }
                                 Text { text: root.devices.length; color: Theme.subtle; font-size: 12px; vertical-alignment: center; }
-                                Rectangle { horizontal-stretch: 1; }
                             }
                             for d in root.devices: MobileDeviceRow { device: d; connect(id) => { root.connect(id); } }
                         }
@@ -374,56 +301,38 @@ export component MobileHomePage inherits Rectangle {
                 }
             }
 
-            if root.view == HomeView.devices: Flickable {
-                content-height: Math.max(self.height, devices-content.preferred-height);
-
+            if root.view == HomeView.book: Flickable {
+                content-height: Math.max(self.height, book-content.preferred-height);
                 content-width: self.width;
-                devices-content := VerticalLayout {
+                book-content := VerticalLayout {
                     padding: 18px;
                     padding-top: 8px;
                     spacing: 16px;
                     alignment: start;
-                    Heading { title: "Devices"; subtitle: "Signed in to your account. Computers can be reached from this phone."; }
-                    Card {
-                        VerticalLayout {
-                            padding-top: 6px;
-                            padding-bottom: 6px;
-                            for d in root.devices: MobileDeviceRow { device: d; connect(id) => { root.connect(id); } }
+                    HorizontalLayout {
+                        spacing: 10px;
+                        Heading {
+                            horizontal-stretch: 1;
+                            title: "Address book";
+                            subtitle: root.signed-in ? "Synced, end-to-end encrypted, with your account." : "Sign in to have it on all your devices.";
                         }
+                        PrimaryButton { y: 2px; width: 44px; height: 38px; icon: Icons.plus; clicked => { root.book-add(); } }
                     }
-                }
-            }
-
-            if root.view == HomeView.contacts: Flickable {
-                content-height: Math.max(self.height, contacts-content.preferred-height);
-
-                content-width: self.width;
-                contacts-content := VerticalLayout {
-                    padding: 18px;
-                    padding-top: 8px;
-                    spacing: 16px;
-                    alignment: start;
-                    Heading { title: "Contacts"; subtitle: "People you have connected with. You are warned if their identity ever changes."; }
-                    if root.contacts.length == 0: Card {
+                    Card {
+                        highlighted: root.tour-target == "book";
                         VerticalLayout {
-                            padding: 28px;
-                            spacing: 10px;
-                            Icon { x: (parent.width - self.width) / 2; d: Icons.contacts; size: 26px; color: Theme.faint; }
-                            Text {
-                                text: "No contacts yet. They appear here after your first session with someone.";
+                            padding: 6px;
+                            if root.book.length == 0: Text {
+                                text: "Nothing here yet. Add a computer by its ID.";
                                 color: Theme.subtle;
                                 font-size: 14px;
-                                horizontal-alignment: center;
                                 wrap: word-wrap;
                             }
-                        }
-                    }
-                    if root.contacts.length > 0: Card {
-                        VerticalLayout {
-                            for c in root.contacts: MobileContactRow {
-                                contact: c;
-                                revoke(u) => { root.revoke-contact(u); }
-                                forget(u) => { root.forget-contact(u); }
+                            BookList {
+                                items: root.book;
+                                connect(id) => { root.connect(id); }
+                                edit(id) => { root.book-edit(id); }
+                                remove(id) => { root.book-remove(id); }
                             }
                         }
                     }
@@ -432,81 +341,31 @@ export component MobileHomePage inherits Rectangle {
 
             if root.view == HomeView.settings: Flickable {
                 content-height: Math.max(self.height, settings-content.preferred-height);
-
                 content-width: self.width;
-                settings-content := VerticalLayout {
-                    padding: 18px;
-                    padding-top: 8px;
-                    spacing: 16px;
-                    alignment: start;
-                    Heading { title: "Settings"; }
-                    Card {
-                        highlighted: root.tour-target == "sessions";
-                        VerticalLayout {
-                            padding: 18px;
-                            spacing: 16px;
-                            SectionTitle { text: "Sessions"; }
-                            MobileSetting {
-                                title: "Share clipboard";
-                                detail: "Copy on one device, paste on the other during a session.";
-                                checked <=> root.share-clipboard;
-                                toggled(v) => { root.share-clipboard-changed(v); }
-                            }
-                            Divider { }
-                            MobileSetting {
-                                title: "Direct connections";
-                                detail: "Connect straight to the computer when possible, for lower latency. This shows your IP address to the other side; when off, sessions always go through the relay.";
-                                checked <=> root.allow-direct;
-                                toggled(v) => { root.allow-direct-changed(v); }
-                            }
-                        }
-                    }
-                    Card {
-                        highlighted: root.tour-target == "account";
-                        VerticalLayout {
-                            padding: 18px;
-                            spacing: 14px;
-                            SectionTitle { text: "Account"; }
-                            HorizontalLayout {
-                                spacing: 12px;
-                                Avatar { y: (parent.height - self.height) / 2; letter: root.user-letter; size: 40px; }
-                                VerticalLayout {
-                                    alignment: center;
-                                    spacing: 2px;
-                                    Text { text: root.username; color: Theme.text; font-size: 15px; font-weight: 500; }
-                                    Text { text: root.server-label; color: Theme.subtle; font-size: 12px; overflow: elide; }
-                                }
-                            }
-                            Divider { }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Icon { y: (parent.height - self.height) / 2; d: Icons.phone; size: 16px; color: Theme.muted; }
-                                Text { text: root.my-device-name; color: Theme.muted; font-size: 13px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
-                                Text { text: root.my-id; color: Theme.text-2; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
-                            }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                Icon { y: (parent.height - self.height) / 2; d: Icons.shield; size: 16px; color: Theme.accent; }
-                                Text { text: "Fingerprint"; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
-                                Text { text: root.fingerprint; color: Theme.text-2; font-size: 13px; font-family: Theme.mono; vertical-alignment: center; }
-                            }
-                            HorizontalLayout {
-                                spacing: 10px;
-                                GhostButton {
-                                    text: "Take the tour";
-                                    icon: Icons.help;
-                                    horizontal-stretch: 1;
-                                    clicked => { root.start-tour(); }
-                                }
-                                GhostButton {
-                                    text: "Sign out";
-                                    icon: Icons.logout;
-                                    horizontal-stretch: 1;
-                                    clicked => { root.sign-out(); }
-                                }
-                            }
-                        }
-                    }
+                settings-content := SettingsView {
+                    width: parent.width;
+                    mobile: true;
+                    can-host: false;
+                    device-name <=> root.my-device-name;
+                    my-id: root.my-id;
+                    fingerprint: root.fingerprint;
+                    server-label: root.server-label;
+                    signed-in: root.signed-in;
+                    username: root.username;
+                    user-letter: root.user-letter;
+                    account-2fa: root.account-2fa;
+                    share-clipboard <=> root.share-clipboard;
+                    allow-direct <=> root.allow-direct;
+                    tour-target: root.tour-target;
+                    rename-device(n) => { root.rename-device(n); }
+                    share-clipboard-changed(v) => { root.share-clipboard-changed(v); }
+                    allow-direct-changed(v) => { root.allow-direct-changed(v); }
+                    sign-in => { root.sign-in(); }
+                    create-account => { root.create-account(); }
+                    sign-out => { root.sign-out(); }
+                    totp-setup => { root.totp-setup(); }
+                    totp-disable => { root.totp-disable(); }
+                    start-tour => { root.start-tour(); }
                 }
             }
         }
@@ -519,8 +378,7 @@ export component MobileHomePage inherits Rectangle {
             HorizontalLayout {
                 padding-top: 4px;
                 TabButton { text: "Connect"; icon: Icons.connect; active: root.view == HomeView.connect; clicked => { root.view = HomeView.connect; } }
-                TabButton { text: "Devices"; icon: Icons.monitor; active: root.view == HomeView.devices; clicked => { root.view = HomeView.devices; } }
-                TabButton { text: "Contacts"; icon: Icons.contacts; active: root.view == HomeView.contacts; clicked => { root.view = HomeView.contacts; } }
+                TabButton { text: "Address book"; icon: Icons.book; active: root.view == HomeView.book; clicked => { root.view = HomeView.book; } }
                 TabButton { text: "Settings"; icon: Icons.settings; active: root.view == HomeView.settings; clicked => { root.view = HomeView.settings; } }
             }
         }

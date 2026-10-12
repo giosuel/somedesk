@@ -1,0 +1,42 @@
+// The banner an enrolled machine (somedesk-agent) shows while someone controls it. It is the
+// agent's only window: always on top, and always shown during a session.
+
+import { Theme, Icons } from "theme.slint";
+import { Icon, PrimaryButton } from "widgets.slint";
+
+export component AgentBanner inherits Window {
+    title: "SomeDesk";
+    no-frame: true;
+    always-on-top: true;
+    width: 560px;
+    height: 64px;
+    background: Theme.warning-soft;
+    default-font-family: "Geist";
+    in property <string> who;
+    in property <string> org;
+    callback disconnect();
+    Rectangle {
+        border-width: 1px;
+        border-color: #5a4a2e;
+        HorizontalLayout {
+            padding-left: 16px;
+            padding-right: 12px;
+            spacing: 12px;
+            Icon { y: (parent.height - self.height) / 2; d: Icons.eye; size: 18px; color: Theme.warning; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: root.who + " is controlling this computer"; color: Theme.warning-text; font-size: 13px; font-weight: 600; overflow: elide; }
+                Text { text: "For " + root.org + " · SomeDesk"; color: Theme.muted; font-size: 11px; overflow: elide; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            PrimaryButton {
+                y: (parent.height - self.height) / 2;
+                height: 34px;
+                danger: true;
+                text: "Disconnect";
+                clicked => { root.disconnect(); }
+            }
+        }
+    }
+}

@@ -1,14 +1,17 @@
 //! Connection to the SomeDesk server.
 
-use crate::credentials::DeviceCredentials;
+use crate::credentials::{AccountCredentials, DeviceCredentials};
 use crate::direct::DirectHub;
 use crate::tls::PinningVerifier;
 use crate::{ClientError, Result};
 use somedesk_crypto::keys::{DeviceKey, IdentityKey};
 use somedesk_crypto::opaque;
 use somedesk_crypto::recovery::RecoveryKey;
+use somedesk_crypto::totp::TotpSecret;
+use somedesk_crypto::vault::VaultKey;
 use somedesk_proto::control::*;
 use somedesk_proto::frame::{read_msg, write_msg};
+use somedesk_proto::org::{OrgDeviceCert, SignedPolicy};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -266,8 +269,15 @@ impl ServerConn {
         }
     }
 
-    /// Password login. Decrypts the identity key locally.
+    /// Password login. Decrypts the identity key locally. On an account with two-factor
+    /// authentication this fails with [`ClientError::TotpRequired`]; log in again with the code
+    /// ([`ServerConn::login_with_code`]).
     pub async fn login(&self, username: &str, password: &str) -> Result<LoggedIn> {
+        self.login_with_code(username, password, None).await
+    }
+
+    /// Password login with the code from the authenticator app, for accounts that have one.
+    pub async fn login_with_code(&self, username: &str, password: &str, code: Option<&str>) -> Result<LoggedIn> {
         let username = Self::normalize(username)?;
         let (m1, st) = opaque::client_login_start(&username, password)?;
         let Response::LoginStart { message } =
@@ -282,48 +292,131 @@ impl ServerConn {
             }
             Err(e) => return Err(e.into()),
         };
-        let Response::LoginFinish { identity_pk, key_bundle, has_recovery } =
-            self.request(Request::LoginFinish { message: fin }).await?
-        else {
+        let finish = match self.request(Request::LoginFinish { message: fin }).await? {
+            Response::TotpRequired => match code {
+                Some(code) => self.request(Request::LoginTotp { code: code.to_owned() }).await?,
+                None => return Err(ClientError::TotpRequired),
+            },
+            other => other,
+        };
+        let Response::LoginFinish { identity_pk, key_bundle, has_recovery } = finish else {
             return Err(unexpected());
         };
         let identity = IdentityKey::open(&key_bundle, &export_key, &username, &identity_pk)?;
         Ok(LoggedIn { username, identity, has_recovery })
     }
 
-    /// Enrolls this machine under the logged-in account.
-    pub async fn enroll_device(&self, server: &str, login: &LoggedIn, device_name: &str) -> Result<DeviceCredentials> {
-        let key = DeviceKey::generate();
-        let now =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        let cert = login.identity.certify_device(&login.username, key.public(), device_name.trim(), now);
-        let Response::DeviceRegistered { device_id, token } =
-            self.request(Request::RegisterDevice { cert: cert.clone() }).await?
+    /// Brings the device with `key` online under the name `name`: proves to the server that this
+    /// connection holds the key. A key the server doesn't know yet gets a new ID.
+    pub async fn come_online(&self, key: &DeviceKey, name: &str) -> Result<DeviceInfo> {
+        self.come_online_as(key, name, None).await
+    }
+
+    /// [`ServerConn::come_online`] for a device enrolled into an organisation, with its
+    /// certificate from the service worker.
+    pub async fn come_online_as(&self, key: &DeviceKey, name: &str, org: Option<OrgDeviceCert>) -> Result<DeviceInfo> {
+        let Response::DeviceChallenge { server_pk, nonce } =
+            self.request(Request::DeviceChallenge { device_pk: key.public() }).await?
         else {
             return Err(unexpected());
         };
+        let proof = key.prove(&server_pk, &nonce);
+        match self.request(Request::DeviceAuth { name: name.trim().to_owned(), proof, org }).await? {
+            Response::Authenticated { device } => Ok(device),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Sets up this installation: creates its device key and brings it online, which gives it
+    /// its ID. No account is needed (unless the server only lets in its accounts' devices; then
+    /// log in on this connection first and [`ServerConn::attach`] right after).
+    pub async fn create_device(&self, server: &str, name: &str) -> Result<DeviceCredentials> {
+        let key = DeviceKey::generate();
+        let device = self.come_online(&key, name).await?;
+        self.announce_candidates().await?;
         Ok(DeviceCredentials {
             server: server.to_owned(),
             server_fingerprint: self.fingerprint,
-            username: login.username.clone(),
-            identity_pk: login.identity.public(),
-            device_id,
+            device_id: device.device_id,
             device_secret: *key.secret_bytes(),
-            cert,
-            token,
+            device_name: device.identity.name,
+            account: None,
+            org: None,
         })
     }
 
-    /// Authenticates as an enrolled device; the device is online while this connection lives.
-    /// Also tells the server where the device can be reached directly (see
-    /// [`ServerConn::set_allow_direct`]).
-    pub async fn authenticate(&self, creds: &DeviceCredentials) -> Result<DeviceInfo> {
-        let device = match self.request(Request::TokenAuth { device_id: creds.device_id, token: creds.token }).await? {
-            Response::Authenticated { device, .. } => device,
-            _ => return Err(unexpected()),
-        };
+    /// Brings an existing device online; it is online while this connection lives. Also tells
+    /// the server where the device can be reached directly (see
+    /// [`ServerConn::set_allow_direct`]). Updates `creds` if the server knows the device
+    /// differently: under another ID (e.g. after the server lost its data) or off its account.
+    pub async fn authenticate(&self, creds: &mut DeviceCredentials) -> Result<DeviceInfo> {
+        let device = self.come_online_as(&creds.device_key(), &creds.device_name, creds.org.clone()).await?;
+        if device.device_id != creds.device_id {
+            tracing::warn!(old = creds.device_id, new = device.device_id, "the server gave this device a new ID");
+            creds.device_id = device.device_id;
+        }
+        if device.identity.account.is_none() && creds.account.is_some() {
+            tracing::info!("this device was signed out of its account elsewhere");
+            creds.account = None;
+        }
         self.announce_candidates().await?;
         Ok(device)
+    }
+
+    /// Enrolls this installation into an organisation with a service worker's enrollment key:
+    /// creates the device key, has the worker certify it and brings the device online.
+    pub async fn enroll_device(
+        &self,
+        server: &str,
+        key: &somedesk_crypto::org::EnrollmentKey,
+        name: &str,
+    ) -> Result<DeviceCredentials> {
+        let device_key = DeviceKey::generate();
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let cert = key.certify_device(device_key.public(), name.trim(), now);
+        let device = self.come_online_as(&device_key, name, Some(cert.clone())).await?;
+        self.announce_candidates().await?;
+        Ok(DeviceCredentials {
+            server: server.to_owned(),
+            server_fingerprint: self.fingerprint,
+            device_id: device.device_id,
+            device_secret: *device_key.secret_bytes(),
+            device_name: device.identity.name,
+            account: None,
+            org: Some(cert),
+        })
+    }
+
+    /// Signs this (online) device in to the logged-in account. The device keeps its ID.
+    pub async fn attach(&self, login: &LoggedIn, creds: &mut DeviceCredentials) -> Result<()> {
+        let now =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+        let cert =
+            login.identity.certify_device(&login.username, creds.device_key().public(), creds.device_name.trim(), now);
+        match self.request(Request::AttachDevice { cert: cert.clone() }).await? {
+            Response::Ok => {
+                creds.account = Some(AccountCredentials {
+                    username: login.username.clone(),
+                    identity_pk: login.identity.public(),
+                    cert,
+                    vault_key: Some(VaultKey::derive(&login.identity).to_bytes()),
+                });
+                Ok(())
+            }
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Signs this device out of its account. It keeps its ID.
+    pub async fn detach(&self, creds: &mut DeviceCredentials) -> Result<()> {
+        match self.request(Request::DetachDevice).await? {
+            Response::Ok => {
+                creds.account = None;
+                Ok(())
+            }
+            _ => Err(unexpected()),
+        }
     }
 
     /// Whether sessions may use direct connections (default: yes). Without, this device's
@@ -360,6 +453,104 @@ impl ServerConn {
         }
     }
 
+    /// The account of this connection: its name and whether it has two-factor authentication.
+    pub async fn account_info(&self) -> Result<(String, bool)> {
+        match self.request(Request::AccountInfo).await? {
+            Response::Account { username, totp_enabled } => Ok((username, totp_enabled)),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Starts turning on two-factor authentication (after a password login): returns the secret
+    /// for the authenticator app. [`ServerConn::totp_enable`] with a code turns it on.
+    pub async fn totp_begin(&self) -> Result<TotpSecret> {
+        match self.request(Request::TotpBegin).await? {
+            Response::TotpSecret { secret } => Ok(TotpSecret::from_bytes(&secret)),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn totp_enable(&self, code: &str) -> Result<()> {
+        match self.request(Request::TotpEnable { code: code.to_owned() }).await? {
+            Response::Ok => Ok(()),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn totp_disable(&self, code: &str) -> Result<()> {
+        match self.request(Request::TotpDisable { code: code.to_owned() }).await? {
+            Response::Ok => Ok(()),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// The account's encrypted vault: (version, blob); (0, empty) if there is none yet.
+    pub async fn get_vault(&self) -> Result<(u64, Vec<u8>)> {
+        match self.request(Request::GetVault).await? {
+            Response::Vault { version, blob } => Ok((version, blob)),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Stores the vault if it is still at `base_version`; fails with a `Conflict` otherwise.
+    pub async fn put_vault(&self, base_version: u64, blob: Vec<u8>) -> Result<u64> {
+        match self.request(Request::PutVault { base_version, blob }).await? {
+            Response::VaultSaved { version } => Ok(version),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// An account's identity key, as the server knows it.
+    pub async fn lookup_user(&self, username: &str) -> Result<[u8; 32]> {
+        match self.request(Request::LookupUser { username: username.to_owned() }).await? {
+            Response::User { identity_pk, .. } => Ok(identity_pk),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn create_org(&self, name: &str, org_pk: [u8; 32], sealed_key: Vec<u8>) -> Result<u64> {
+        match self.request(Request::CreateOrg { name: name.to_owned(), org_pk, sealed_key }).await? {
+            Response::OrgCreated { org_id } => Ok(org_id),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn list_orgs(&self) -> Result<Vec<OrgInfo>> {
+        match self.request(Request::ListOrgs).await? {
+            Response::Orgs(orgs) => Ok(orgs),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn put_org_policy(&self, org_id: u64, policy: SignedPolicy) -> Result<()> {
+        match self.request(Request::PutOrgPolicy { org_id, policy }).await? {
+            Response::Ok => Ok(()),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn share_org_key(&self, org_id: u64, username: &str, sealed_key: Vec<u8>) -> Result<()> {
+        match self.request(Request::ShareOrgKey { org_id, username: username.to_owned(), sealed_key }).await? {
+            Response::Ok => Ok(()),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn get_org_policy(&self, org_id: u64) -> Result<Option<SignedPolicy>> {
+        match self.request(Request::GetOrgPolicy { org_id }).await? {
+            Response::OrgPolicy(p) => Ok(p),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn list_org_devices(&self, org_id: u64) -> Result<Vec<DeviceInfo>> {
+        match self.request(Request::ListOrgDevices { org_id }).await? {
+            Response::Devices(d) => Ok(d),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Takes one of the account's devices off the account (it keeps its ID).
     pub async fn remove_device(&self, device_id: u64) -> Result<()> {
         match self.request(Request::RemoveDevice { device_id }).await? {
             Response::Ok => Ok(()),

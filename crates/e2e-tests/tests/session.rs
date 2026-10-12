@@ -3,7 +3,7 @@
 use somedesk_client::files::{AcceptPolicy, Direction, FileTransfers, TransferEvent};
 use somedesk_client::host::{self, HostSettings};
 use somedesk_client::session;
-use somedesk_client::trust::PeerStatus;
+use somedesk_client::trust::{Changed, PeerStatus};
 use somedesk_client::viewer::{self, SessionEnd, ViewerEvent};
 use somedesk_client::SessionExtras;
 use somedesk_codec::RgbFrame;
@@ -34,7 +34,7 @@ async fn start_viewer(viewer: &Device, host_id: u64) -> ViewerSide {
 
 async fn start_viewer_with(viewer: &Device, host_id: u64, extras: SessionExtras) -> ViewerSide {
     let (ch, host_info) = session::connect(&viewer.conn, &viewer.creds, host_id).await.expect("viewer handshake");
-    assert_eq!(ch.peer.device_pk, host_info.cert.device_pk);
+    assert_eq!(ch.peer.device_pk, host_info.identity.device_pk);
     let (input, input_rx) = mpsc::unbounded_channel();
     let (ftx, frames) = mpsc::unbounded_channel();
     let (atx, accepted) = mpsc::unbounded_channel();
@@ -94,9 +94,9 @@ async fn remote_control_session_end_to_end() {
     let viewer_task = start_viewer(&viewer_dev, host_id);
     let host_side = async {
         let (sid, from, cands) = next_incoming(&mut host_dev).await;
-        assert_eq!(from.username, "alice-marker-user");
+        assert_eq!(from.identity.username(), Some("alice-marker-user"));
         let ch = session::accept(&host_dev.conn, &host_dev.creds, sid, &from, &cands).await.expect("host handshake");
-        assert_eq!(ch.peer.username, "alice-marker-user", "host sees the verified viewer identity");
+        assert_eq!(ch.peer.username(), Some("alice-marker-user"), "host sees the verified viewer identity");
         ch
     };
     let (mut v, host_ch) = tokio::join!(viewer_task, host_side);
@@ -164,7 +164,7 @@ async fn remote_control_session_end_to_end() {
     assert!(relayed > 1000, "relay forwarded {relayed} bytes");
     assert!(!ts.relay_contains(b"alice-marker-user"));
     assert!(!ts.relay_contains(b"bob-desktop"));
-    assert!(!ts.relay_contains(&viewer_dev.creds.cert.signature));
+    assert!(!ts.relay_contains(&viewer_dev.creds.account.as_ref().unwrap().cert.signature));
     ts.stop().await;
 }
 
@@ -660,8 +660,8 @@ async fn swapped_identity_is_detected() {
         async { session::connect(&viewer_dev.conn, &viewer_dev.creds, host_id).await.unwrap() },
         host_side
     );
-    assert_eq!(trust.status(&ch.peer), PeerStatus::New);
-    trust.remember(&ch.peer);
+    assert_eq!(trust.status(host_id, &ch.peer), PeerStatus::New);
+    trust.remember(host_id, &ch.peer);
     drop(ch);
 
     // The "server" replaces bob with an impostor of the same name.
@@ -677,11 +677,46 @@ async fn swapped_identity_is_detected() {
         async { session::connect(&viewer_dev.conn, &viewer_dev.creds, impostor_id).await.unwrap() },
         impostor_side
     );
-    assert_eq!(ch.peer.username, "bob");
+    assert_eq!(ch.peer.username(), Some("bob"));
     assert_eq!(
-        trust.status(&ch.peer),
-        PeerStatus::Changed { previous_identity_pk: host_dev.creds.identity_pk },
+        trust.status(impostor_id, &ch.peer),
+        PeerStatus::Changed(Changed::Account {
+            previous_identity_pk: host_dev.creds.account.as_ref().unwrap().identity_pk
+        }),
         "a different key under a known name must be flagged"
+    );
+    drop(ch);
+
+    // Or the "server" hands bob's device ID to another device.
+    sqlx::query("UPDATE devices SET id = $1 WHERE id = $2")
+        .bind(host_id as i64 + 1)
+        .bind(host_id as i64)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE devices SET id = $1 WHERE id = $2")
+        .bind(host_id as i64)
+        .bind(impostor_id as i64)
+        .execute(&mut db)
+        .await
+        .unwrap();
+    // The impostor reconnects and gets bob's old ID.
+    let (conn, events) = ts.connect().await;
+    let mut creds = impostor.creds.clone();
+    assert_eq!(conn.authenticate(&mut creds).await.unwrap().device_id, host_id);
+    let mut impostor = somedesk_e2e_tests::Device { conn, events, creds };
+    let impostor_side = async {
+        let (sid, from, cands) = next_incoming(&mut impostor).await;
+        session::accept(&impostor.conn, &impostor.creds, sid, &from, &cands).await.unwrap()
+    };
+    let ((ch, _), _imp_ch) = tokio::join!(
+        async { session::connect(&viewer_dev.conn, &viewer_dev.creds, host_id).await.unwrap() },
+        impostor_side
+    );
+    assert_eq!(
+        trust.status(host_id, &ch.peer),
+        PeerStatus::Changed(Changed::Device { previous_pk: host_dev.creds.device_key().public() }),
+        "another key behind a known ID must be flagged"
     );
     let _ = std::fs::remove_file(store_path);
     ts.stop().await;

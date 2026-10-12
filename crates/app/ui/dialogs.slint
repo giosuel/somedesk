@@ -1,8 +1,12 @@
 import { Theme, Icons } from "theme.slint";
-import { Icon, PrimaryButton, GhostButton, Avatar, Spinner, Checkbox } from "widgets.slint";
+import { Icon, PrimaryButton, GhostButton, Avatar, Spinner, Checkbox, Field, Segmented, ErrorBox, LinkText } from "widgets.slint";
+import { LoginForm } from "login.slint";
 
 /// How the caller relates to what this computer remembers (see the trust store).
 export enum TrustLevel { new-peer, known, changed, own-account }
+
+/// Where a saved password lives: nowhere, in this device's keychain, or in the account's vault.
+export enum SaveIn { nowhere, device, account }
 
 component Backdrop inherits Rectangle {
     background: Theme.scrim;
@@ -55,7 +59,6 @@ export component IncomingDialog inherits Backdrop {
     in property <string> fingerprint;
     in property <string> previous-fingerprint;
     in property <TrustLevel> trust;
-    in-out property <bool> always-allow;
     /// Extra guidance, e.g. about the desktop's own permission dialog on Wayland.
     in property <string> note;
     callback answer(bool);
@@ -69,7 +72,7 @@ export component IncomingDialog inherits Backdrop {
                 alignment: center;
                 spacing: 2px;
                 Text { text: root.user + " wants to connect"; color: Theme.text; font-size: 19px; font-weight: 600; letter-spacing: -0.3px; }
-                Text { text: "from " + root.device; color: Theme.muted; font-size: 13px; }
+                Text { text: root.device; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
             }
         }
         Text {
@@ -97,9 +100,9 @@ export component IncomingDialog inherits Backdrop {
                     }
                     Text {
                         text: root.trust == TrustLevel.own-account ? "One of your own devices"
-                            : root.trust == TrustLevel.known ? "Known contact — you have connected before"
-                            : root.trust == TrustLevel.changed ? root.user + "'s identity has changed"
-                            : "First connection — compare this fingerprint with " + root.user;
+                            : root.trust == TrustLevel.known ? "Known device — you have connected before"
+                            : root.trust == TrustLevel.changed ? "This device's identity has changed"
+                            : "First connection — compare this fingerprint with them";
                         color: root.trust == TrustLevel.changed ? Theme.danger-text
                             : root.trust == TrustLevel.new-peer ? Theme.muted : Theme.accent;
                         font-size: 13px;
@@ -128,10 +131,6 @@ export component IncomingDialog inherits Backdrop {
             font-size: 13px;
         }
         if root.note != "": Note { text: root.note; }
-        if root.trust == TrustLevel.new-peer || root.trust == TrustLevel.known: Checkbox {
-            text: "Let " + root.device + " connect without asking next time";
-            checked <=> root.always-allow;
-        }
         HorizontalLayout {
             spacing: 10px;
             alignment: end;
@@ -444,7 +443,10 @@ export component FileOfferDialog inherits Backdrop {
 
 /// The computer we are connecting to presents a different identity than last time.
 export component IdentityChangedDialog inherits Backdrop {
+    /// The device (or account) whose key changed.
     in property <string> user;
+    /// Whether the device behind the ID changed, rather than its account's key.
+    in property <bool> device-changed;
     in property <string> fingerprint;
     in property <string> previous-fingerprint;
     callback answer(bool);
@@ -463,12 +465,14 @@ export component IdentityChangedDialog inherits Backdrop {
             VerticalLayout {
                 alignment: center;
                 spacing: 2px;
-                Text { text: root.user + "'s identity has changed"; color: Theme.danger-text; font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+                Text { text: root.user + "'s identity has changed"; color: Theme.danger-text; font-size: 18px; font-weight: 600; letter-spacing: -0.3px; wrap: word-wrap; }
                 Text { text: "The connection was stopped to protect you."; color: Theme.muted; font-size: 13px; }
             }
         }
         Text {
-            text: "That happens after an account reset, but it is also what an attacker in the middle would look like.";
+            text: root.device-changed
+                ? "A different device now answers to this ID. That happens when SomeDesk was reinstalled there, but it is also what an attacker in the middle would look like."
+                : "That happens after an account reset, but it is also what an attacker in the middle would look like.";
             color: Theme.text-2;
             font-size: 14px;
             wrap: word-wrap;
@@ -495,6 +499,382 @@ export component IdentityChangedDialog inherits Backdrop {
             alignment: end;
             GhostButton { button-height: 42px; text: "Trust new identity"; fg: Theme.danger-text; clicked => { root.answer(true); } }
             PrimaryButton { height: 42px; text: "Cancel"; clicked => { root.answer(false); } }
+        }
+    }
+}
+
+/// A small round button with an X, to close a dialog.
+component CloseButton inherits Rectangle {
+    callback clicked;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: close-ta.has-hover ? Theme.raised : transparent;
+    Icon { d: Icons.x; size: 16px; color: Theme.muted; }
+    close-ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// Signing in, creating an account, resetting the password, or confirming an action with the
+/// password (and the authenticator code, if the account has one).
+export component AccountDialog inherits Backdrop {
+    in property <string> error;
+    in property <bool> busy;
+    in-out property <string> username;
+    in-out property <string> password;
+    in-out property <string> password2;
+    in-out property <bool> create-mode;
+    in-out property <bool> recover-mode;
+    in-out property <string> recovery-key;
+    in property <bool> need-code;
+    in-out property <string> code;
+    in property <string> purpose;
+    callback submit();
+    callback close();
+    Sheet {
+        sheet-width: Math.min(440px, root.width - 32px);
+        HorizontalLayout {
+            alignment: end;
+            CloseButton { clicked => { root.close(); } }
+        }
+        LoginForm {
+            error: root.error;
+            busy: root.busy;
+            username <=> root.username;
+            password <=> root.password;
+            password2 <=> root.password2;
+            create-mode <=> root.create-mode;
+            recover-mode <=> root.recover-mode;
+            recovery-key <=> root.recovery-key;
+            need-code: root.need-code;
+            code <=> root.code;
+            purpose: root.purpose;
+            submit => { root.submit(); }
+        }
+    }
+}
+
+/// Where to keep a password: the three options, with the ones this device can't offer dimmed.
+component SaveChoice inherits VerticalLayout {
+    in-out property <SaveIn> save;
+    in property <bool> keychain;
+    in property <bool> signed-in;
+    spacing: 7px;
+    Text { text: "Remember the password"; color: Theme.muted; font-size: 13px; }
+    Segmented {
+        options: ["Don't save", "On this device", "In my account"];
+        enabled: [true, root.keychain, root.signed-in];
+        selected: root.save == SaveIn.device ? 1 : root.save == SaveIn.account ? 2 : 0;
+        changed(i) => { root.save = i == 1 ? SaveIn.device : i == 2 ? SaveIn.account : SaveIn.nowhere; }
+    }
+    Text {
+        text: !root.keychain && !root.signed-in
+            ? "This device has no keychain to keep it in. Sign in to save it in your account (encrypted, only your devices can read it)."
+            : root.save == SaveIn.device ? "Kept in this computer's keychain."
+            : root.save == SaveIn.account ? "Kept in your account, encrypted so that only your own devices can read it."
+            : "You'll type it each time. The code from the authenticator app is never saved.";
+        color: Theme.subtle;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+}
+
+/// Unattended access to another computer: its password and the current code from its
+/// authenticator app.
+export component PasswordConnectDialog inherits Backdrop {
+    in property <string> target;
+    in-out property <string> password;
+    in-out property <string> code;
+    in-out property <SaveIn> save;
+    in property <bool> keychain;
+    in property <bool> signed-in;
+    /// The password came from the address book or keychain; only the code is needed.
+    in property <bool> password-saved;
+    in property <string> error;
+    in property <bool> busy;
+    callback submit();
+    callback cancel();
+    Sheet {
+        sheet-width: Math.min(440px, root.width - 32px);
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 14px;
+                background: Theme.accent-soft;
+                Icon { d: Icons.key; size: 22px; color: Theme.accent; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text { text: "Unattended access"; color: Theme.text; font-size: 19px; font-weight: 600; letter-spacing: -0.3px; }
+                Text { text: root.target; color: Theme.muted; font-size: 13px; }
+            }
+        }
+        Text {
+            text: "Nobody has to be at the other computer. Use the password set up there, and the code its authenticator app shows right now.";
+            color: Theme.text-2;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        if !root.password-saved: Field {
+            label: "Password";
+            placeholder: "The other computer's unattended-access password";
+            password: true;
+            text <=> root.password;
+            enabled: !root.busy;
+        }
+        Field {
+            label: "Code from the authenticator app";
+            placeholder: "123 456";
+            font-family: Theme.mono;
+            font-size: 20px;
+            text <=> root.code;
+            enabled: !root.busy;
+            accepted => { root.submit(); }
+        }
+        if !root.password-saved: SaveChoice { save <=> root.save; keychain: root.keychain; signed-in: root.signed-in; }
+        if root.error != "": ErrorBox { text: root.error; }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: end;
+            GhostButton { button-height: 42px; text: "Cancel"; clicked => { root.cancel(); } }
+            PrimaryButton { height: 42px; text: "Connect"; busy: root.busy; clicked => { root.submit(); } }
+        }
+    }
+}
+
+/// Adding or editing an address-book entry.
+export component EntryDialog inherits Backdrop {
+    in property <bool> new-entry;
+    in-out property <string> device-id;
+    in-out property <string> label;
+    in-out property <string> password;
+    in-out property <SaveIn> save;
+    in property <bool> keychain;
+    in property <bool> signed-in;
+    /// A password is saved already (it isn't shown); leave the field empty to keep it.
+    in property <bool> has-password;
+    in property <string> error;
+    callback submit();
+    callback cancel();
+    Sheet {
+        sheet-width: Math.min(460px, root.width - 32px);
+        HorizontalLayout {
+            Text {
+                text: root.new-entry ? "Add to address book" : "Edit " + root.label;
+                color: Theme.text;
+                font-size: 19px;
+                font-weight: 600;
+                letter-spacing: -0.3px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            CloseButton { clicked => { root.cancel(); } }
+        }
+        Field {
+            label: "ID";
+            placeholder: "123 456 789";
+            font-family: Theme.mono;
+            text <=> root.device-id;
+            enabled: root.new-entry;
+        }
+        Field { label: "Name"; placeholder: "e.g. Mum's laptop"; text <=> root.label; }
+        Field {
+            label: "Unattended-access password (optional)";
+            placeholder: root.has-password ? "Saved — type to replace it" : "If that computer has unattended access set up";
+            password: true;
+            text <=> root.password;
+        }
+        if root.password != "" || root.has-password: SaveChoice { save <=> root.save; keychain: root.keychain; signed-in: root.signed-in; }
+        if root.error != "": ErrorBox { text: root.error; }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: end;
+            GhostButton { button-height: 42px; text: "Cancel"; clicked => { root.cancel(); } }
+            PrimaryButton { height: 42px; text: "Save"; clicked => { root.submit(); } }
+        }
+    }
+}
+
+/// Setting up an authenticator app: for unattended access to this computer (first a password,
+/// then the app), or for the account's two-factor authentication (just the app).
+export component TwoFactorDialog inherits Backdrop {
+    /// Unattended access (with a password step) rather than the account.
+    in property <bool> unattended;
+    /// 0: choose the password (unattended only), 1: scan and confirm.
+    in property <int> step;
+    in-out property <string> password;
+    in-out property <string> password2;
+    in property <image> qr;
+    in property <string> secret;
+    in-out property <string> code;
+    in property <string> error;
+    in property <bool> busy;
+    callback next();
+    callback cancel();
+    Sheet {
+        sheet-width: Math.min(480px, root.width - 32px);
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 14px;
+                background: Theme.accent-soft;
+                Icon { d: root.unattended ? Icons.key : Icons.shield; size: 22px; color: Theme.accent; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                Text {
+                    text: root.unattended ? "Set up unattended access" : "Two-factor authentication";
+                    color: Theme.text;
+                    font-size: 19px;
+                    font-weight: 600;
+                    letter-spacing: -0.3px;
+                }
+                Text {
+                    text: root.step == 0 ? "Step 1 of 2: a password" : root.unattended ? "Step 2 of 2: an authenticator app" : "Add your account to an authenticator app";
+                    color: Theme.muted;
+                    font-size: 13px;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            CloseButton { y: 0; clicked => { root.cancel(); } }
+        }
+        if root.step == 0: Text {
+            text: "Anyone with this password and a code from your authenticator app can reach this computer without someone accepting. Choose a long password you don't use anywhere else.";
+            color: Theme.text-2;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        if root.step == 0: HorizontalLayout {
+            spacing: 12px;
+            Field {
+                width: (parent.width - 12px) / 2;
+                label: "Password";
+                placeholder: "At least 10 characters";
+                password: true;
+                text <=> root.password;
+                enabled: !root.busy;
+            }
+            Field {
+                width: (parent.width - 12px) / 2;
+                label: "Confirm";
+                placeholder: "Repeat it";
+                password: true;
+                text <=> root.password2;
+                enabled: !root.busy;
+                accepted => { root.next(); }
+            }
+        }
+        if root.step == 1: Text {
+            text: "Scan this code with an authenticator app (Aegis, 2FAS, Google Authenticator, 1Password, …), then type the 6-digit code it shows.";
+            color: Theme.text-2;
+            font-size: 14px;
+            wrap: word-wrap;
+        }
+        if root.step == 1: HorizontalLayout {
+            spacing: 18px;
+            Rectangle {
+                width: 156px;
+                height: 156px;
+                border-radius: 12px;
+                background: white;
+                Image { width: 140px; height: 140px; source: root.qr; image-rendering: pixelated; }
+            }
+            VerticalLayout {
+                alignment: center;
+                spacing: 6px;
+                Text { text: "Or type this key into the app:"; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                Text { text: root.secret; color: Theme.text-2; font-size: 14px; font-family: Theme.mono; wrap: word-wrap; }
+            }
+        }
+        if root.step == 1: Field {
+            label: "Code from the app";
+            placeholder: "123 456";
+            font-family: Theme.mono;
+            font-size: 20px;
+            text <=> root.code;
+            enabled: !root.busy;
+            accepted => { root.next(); }
+        }
+        if root.error != "": ErrorBox { text: root.error; }
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: end;
+            GhostButton { button-height: 42px; text: "Cancel"; clicked => { root.cancel(); } }
+            PrimaryButton {
+                height: 42px;
+                text: root.step == 0 ? "Next" : "Turn on";
+                busy: root.busy;
+                clicked => { root.next(); }
+            }
+        }
+    }
+}
+
+/// Shows a secret once, e.g. a service worker's enrollment key.
+export component SecretDialog inherits Backdrop {
+    in property <string> title;
+    in property <string> detail;
+    in property <string> secret;
+    in property <bool> copied;
+    callback copy();
+    callback done();
+    Sheet {
+        sheet-width: Math.min(520px, root.width - 32px);
+        HorizontalLayout {
+            spacing: 14px;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 14px;
+                background: Theme.warning-soft;
+                Icon { d: Icons.key; size: 22px; color: Theme.warning; }
+            }
+            Text {
+                text: root.title;
+                color: Theme.text;
+                font-size: 19px;
+                font-weight: 600;
+                letter-spacing: -0.3px;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        Text { text: root.detail; color: Theme.text-2; font-size: 14px; wrap: word-wrap; }
+        Rectangle {
+            border-radius: 12px;
+            background: Theme.input-bg;
+            border-width: 1px;
+            border-color: Theme.border-strong;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                Text { text: root.secret; color: Theme.text; font-size: 13px; font-family: Theme.mono; wrap: char-wrap; }
+                HorizontalLayout {
+                    alignment: center;
+                    GhostButton {
+                        text: root.copied ? "Copied" : "Copy to clipboard";
+                        icon: root.copied ? Icons.check : Icons.copy;
+                        button-height: 34px;
+                        clicked => { root.copy(); }
+                    }
+                }
+            }
+        }
+        Text {
+            text: "It is shown only now and isn't stored anywhere. Keep it like a password: whoever has it can enroll devices into the organisation.";
+            color: Theme.warning;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: end;
+            PrimaryButton { text: "Done"; clicked => { root.done(); } }
         }
     }
 }

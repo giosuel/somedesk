@@ -32,6 +32,11 @@ pub fn admin_url() -> Option<String> {
 
 impl TestServer {
     pub async fn start() -> Option<Self> {
+        Self::start_with(true).await
+    }
+
+    /// A server that only lets in its accounts' devices, when `open` is false.
+    pub async fn start_with(open: bool) -> Option<Self> {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".into()))
             .with_test_writer()
@@ -49,6 +54,7 @@ impl TestServer {
             listen: "127.0.0.1:0".parse().unwrap(),
             database_url: db_url.clone(),
             data_dir: std::env::temp_dir().join(&db_name),
+            open,
             relay_tap: Some(Arc::new(move |b: &[u8]| tap_bytes.lock().unwrap().extend_from_slice(b))),
         })
         .await
@@ -68,13 +74,13 @@ impl TestServer {
         ServerConn::connect(&self.addr, Some(self.fingerprint)).await.expect("connect to server")
     }
 
-    /// Registers `user`, logs in, enrolls a device and brings it online.
+    /// Registers `user`, logs in, sets up a device and signs it in to the account.
     pub async fn signup(&self, user: &str, password: &str, device: &str) -> Device {
         let (conn, events) = self.connect().await;
         conn.register(user, password).await.expect("register");
         let login = conn.login(user, password).await.expect("login");
-        let creds = conn.enroll_device(&self.addr, &login, device).await.expect("enroll");
-        conn.authenticate(&creds).await.expect("authenticate");
+        let mut creds = conn.create_device(&self.addr, device).await.expect("create device");
+        conn.attach(&login, &mut creds).await.expect("sign in");
         Device { conn, events, creds }
     }
 
@@ -82,8 +88,15 @@ impl TestServer {
     pub async fn add_device(&self, user: &str, password: &str, device: &str) -> Device {
         let (conn, events) = self.connect().await;
         let login = conn.login(user, password).await.expect("login");
-        let creds = conn.enroll_device(&self.addr, &login, device).await.expect("enroll");
-        conn.authenticate(&creds).await.expect("authenticate");
+        let mut creds = conn.create_device(&self.addr, device).await.expect("create device");
+        conn.attach(&login, &mut creds).await.expect("sign in");
+        Device { conn, events, creds }
+    }
+
+    /// Sets up a device without an account.
+    pub async fn anonymous(&self, device: &str) -> Device {
+        let (conn, events) = self.connect().await;
+        let creds = conn.create_device(&self.addr, device).await.expect("create device");
         Device { conn, events, creds }
     }
 

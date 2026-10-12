@@ -21,8 +21,8 @@ async fn main() -> anyhow::Result<()> {
     let (conn, mut events) = ServerConn::connect(server, None).await?;
     conn.register(user, password).await?;
     let login = conn.login(user, password).await?;
-    let creds = conn.enroll_device(server, &login, user).await?;
-    conn.authenticate(&creds).await?;
+    let mut creds = conn.create_device(server, user).await?;
+    conn.attach(&login, &mut creds).await?;
 
     match mode.as_str() {
         "host" => {

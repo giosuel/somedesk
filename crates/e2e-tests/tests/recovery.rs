@@ -26,22 +26,24 @@ async fn recovery_key_resets_the_password_and_keeps_the_identity() {
     let typed = RecoveryKey::parse(&rk.display().to_lowercase().replace('-', " ")).unwrap();
     let (conn, _) = ts.connect().await;
     let recovered = conn.recover("alice", &typed, "brand new password").await.unwrap();
-    assert_eq!(recovered.login.identity.public(), device.creds.identity_pk, "same identity key as before");
+    let identity_pk = device.creds.account.as_ref().unwrap().identity_pk;
+    assert_eq!(recovered.login.identity.public(), identity_pk, "same identity key as before");
 
-    // The recovered connection is logged in and can enroll a device straight away.
-    let creds = conn.enroll_device(&ts.addr, &recovered.login, "new-laptop").await.unwrap();
-    somedesk_crypto::keys::verify_device_cert(&creds.cert).unwrap();
+    // The recovered connection is logged in and can sign a device in straight away.
+    let mut creds = conn.create_device(&ts.addr, "new-laptop").await.unwrap();
+    conn.attach(&recovered.login, &mut creds).await.unwrap();
+    somedesk_crypto::keys::verify_device_cert(&creds.account.as_ref().unwrap().cert).unwrap();
 
     // Old password is gone, new one works and opens the same identity key.
     let (c, _) = ts.connect().await;
     assert_eq!(code(c.login("alice", "forgotten password").await), ErrorCode::AuthFailed);
     let login = c.login("alice", "brand new password").await.unwrap();
-    assert_eq!(login.identity.public(), device.creds.identity_pk);
+    assert_eq!(login.identity.public(), identity_pk);
     assert!(login.has_recovery);
 
     // Existing devices keep working.
     let (c, _) = ts.connect().await;
-    c.authenticate(&device.creds).await.unwrap();
+    c.authenticate(&mut device.creds.clone()).await.unwrap();
 
     // Recovery keys are single-use: the old one is replaced by the new one.
     let (c, _) = ts.connect().await;
@@ -141,7 +143,7 @@ async fn accounts_without_a_recovery_key_can_add_one() {
 
     let (c, _) = ts.connect().await;
     let recovered = c.recover("alice", &rk, "a new password").await.unwrap();
-    assert_eq!(recovered.login.identity.public(), alice.creds.identity_pk);
+    assert_eq!(recovered.login.identity.public(), alice.creds.account.as_ref().unwrap().identity_pk);
     ts.stop().await;
 }
 

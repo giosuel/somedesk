@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+zeroize.workspace = true
 somedesk-proto.workspace = true
 somedesk-crypto.workspace = true
 somedesk-codec.workspace = true
@@ -23,3 +24,6 @@ rustls.workspace = true
 rcgen.workspace = true
 if-addrs = "0.15.0"
 futures-util = "0.3.34"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = "4"

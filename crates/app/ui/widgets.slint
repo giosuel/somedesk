@@ -409,3 +409,54 @@ export component NavItem inherits Rectangle {
         clicked => { root.clicked(); }
     }
 }
+
+/// A choice of a few options side by side; disabled options are dimmed and can't be picked.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <[bool]> enabled;
+    in-out property <int> selected;
+    callback changed(int);
+    height: 38px;
+    border-radius: 10px;
+    background: Theme.input-bg;
+    border-width: 1px;
+    border-color: Theme.border-strong;
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 3px;
+        for option[i] in root.options: Rectangle {
+            horizontal-stretch: 1;
+            border-radius: 7px;
+            property <bool> on: root.enabled.length <= i || root.enabled[i];
+            background: root.selected == i ? Theme.raised : seg-ta.has-hover && self.on ? #15171b : transparent;
+            Text {
+                text: option;
+                color: !parent.on ? Theme.faint : root.selected == i ? Theme.text : Theme.muted;
+                font-size: 13px;
+                font-weight: root.selected == i ? 500 : 400;
+            }
+            seg-ta := TouchArea {
+                mouse-cursor: parent.on ? pointer : default;
+                clicked => {
+                    if (parent.on) {
+                        root.selected = i;
+                        root.changed(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// An error line in a form.
+export component ErrorBox inherits Rectangle {
+    in property <string> text;
+    background: Theme.danger-soft;
+    border-radius: 11px;
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 10px;
+        Icon { y: 1px; d: Icons.warning; size: 16px; color: Theme.danger-text; }
+        Text { text: root.text; color: Theme.danger-text; font-size: 13px; wrap: word-wrap; }
+    }
+}

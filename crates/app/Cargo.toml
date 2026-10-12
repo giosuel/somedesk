@@ -30,6 +30,7 @@ clap.workspace = true
 hex.workspace = true
 dirs = "6"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 slint = { version = "1.18", features = ["unstable-winit-030"] }
@@ -60,6 +61,7 @@ control your other computers, or let someone help you, through your own SomeDesk
 server. Works on X11 and Wayland (through the desktop portal)."""
 assets = [
     ["target/release/somedesk", "usr/bin/", "755"],
+    ["target/release/somedesk-agent", "usr/bin/", "755"],
     ["../../packaging/linux/ch.giosuel.SomeDesk.desktop", "usr/share/applications/", "644"],
     ["../../packaging/linux/ch.giosuel.SomeDesk.metainfo.xml", "usr/share/metainfo/", "644"],
     ["../../assets/brand/app-icon.svg", "usr/share/icons/hicolor/scalable/apps/ch.giosuel.SomeDesk.svg", "644"],

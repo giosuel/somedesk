@@ -4,9 +4,11 @@
 //! * [`session`] — messages exchanged end-to-end between two clients. These are only
 //!   ever sent inside the Noise channel; the server never sees them.
 //! * [`frame`] — length-prefixed framing used on every QUIC stream.
+//! * [`org`] — organisations' signed access policies and enrolled devices.
 
 pub mod control;
 pub mod frame;
+pub mod org;
 pub mod session;
 
 /// ALPN of direct QUIC connections between two devices.
@@ -16,7 +18,7 @@ pub const P2P_ALPN: &[u8] = b"somedesk-p2p/1";
 pub const ALPN: &[u8] = b"somedesk/1";
 
 /// Bumped whenever the control protocol changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Default UDP port of the server.
 pub const DEFAULT_PORT: u16 = 21116;

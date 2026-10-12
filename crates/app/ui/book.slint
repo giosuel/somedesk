@@ -1,0 +1,161 @@
+import { Theme, Icons } from "theme.slint";
+import { Icon, GhostButton, PrimaryButton, Card } from "widgets.slint";
+
+/// An address-book entry as the UI shows it.
+export struct BookItem {
+    id: string,
+    id-label: string,
+    label: string,
+    /// The account the device was signed in to, or "".
+    account: string,
+    /// Where its unattended password is saved: "", "device" or "account".
+    saved: string,
+    online: bool,
+    /// Enrolled into an organisation (its name), or "".
+    org: string,
+}
+
+component BookRow inherits Rectangle {
+    in property <BookItem> item;
+    in property <bool> compact;
+    callback connect(string);
+    callback edit(string);
+    callback remove(string);
+    height: 62px;
+    border-radius: 12px;
+    background: ta.has-hover ? Theme.raised : transparent;
+    ta := TouchArea { }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 14px;
+        Rectangle {
+            y: (parent.height - self.height) / 2;
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: root.item.online ? Theme.accent-soft : #1f2228;
+            Icon {
+                d: root.item.org != "" ? Icons.building : Icons.monitor;
+                size: 18px;
+                stroke: 1.8px;
+                color: root.item.online ? Theme.accent : Theme.subtle;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            Text { text: root.item.label; color: Theme.text; font-size: 14px; font-weight: 500; overflow: elide; }
+            HorizontalLayout {
+                spacing: 6px;
+                Text {
+                    text: root.item.id-label;
+                    color: Theme.muted;
+                    font-size: 12px;
+                    font-family: Theme.mono;
+                }
+                if root.item.account != "": Text { text: "· " + root.item.account; color: Theme.subtle; font-size: 12px; }
+                if root.item.org != "": Text { text: "· " + root.item.org; color: Theme.subtle; font-size: 12px; }
+                if root.item.saved != "": Icon { y: (parent.height - self.height) / 2; d: Icons.key; size: 12px; color: Theme.accent; }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        if !root.compact: GhostButton {
+            y: (parent.height - self.height) / 2;
+            button-height: 34px;
+            icon: Icons.edit;
+            clicked => { root.edit(root.item.id); }
+        }
+        if !root.compact: GhostButton {
+            y: (parent.height - self.height) / 2;
+            button-height: 34px;
+            icon: Icons.trash;
+            fg: Theme.muted;
+            clicked => { root.remove(root.item.id); }
+        }
+        GhostButton {
+            y: (parent.height - self.height) / 2;
+            width: 92px;
+            button-height: 34px;
+            text: "Connect";
+            clicked => { root.connect(root.item.id); }
+        }
+    }
+}
+
+/// The address book as a list, for the home screen (compact) or its own page.
+export component BookList inherits VerticalLayout {
+    in property <[BookItem]> items;
+    in property <bool> compact;
+    callback connect(string);
+    callback edit(string);
+    callback remove(string);
+    alignment: start;
+    for item in root.items: BookRow {
+        item: item;
+        compact: root.compact;
+        connect(id) => { root.connect(id); }
+        edit(id) => { root.edit(id); }
+        remove(id) => { root.remove(id); }
+    }
+}
+
+export component BookView inherits VerticalLayout {
+    in property <[BookItem]> items;
+    in property <bool> signed-in;
+    callback connect(string);
+    callback edit(string);
+    callback remove(string);
+    callback add();
+    padding: 32px;
+    padding-left: 36px;
+    padding-right: 36px;
+    spacing: 24px;
+    HorizontalLayout {
+        spacing: 16px;
+        VerticalLayout {
+            spacing: 6px;
+            Text { text: "Address book"; color: Theme.text; font-size: 28px; font-weight: 600; letter-spacing: -0.6px; }
+            Text {
+                text: root.signed-in
+                    ? "The computers you connect to. It syncs, end-to-end encrypted, to every device signed in to your account."
+                    : "The computers you connect to. Sign in to an account to have it on all your devices.";
+                color: Theme.muted;
+                font-size: 14px;
+                wrap: word-wrap;
+            }
+        }
+        PrimaryButton { y: 4px; height: 40px; text: "Add"; icon: Icons.plus; clicked => { root.add(); } }
+    }
+    Card {
+        vertical-stretch: 1;
+        if root.items.length == 0: VerticalLayout {
+            alignment: center;
+            padding: 40px;
+            spacing: 10px;
+            HorizontalLayout {
+                alignment: center;
+                Icon { d: Icons.book; size: 28px; color: Theme.faint; }
+            }
+            Text {
+                text: "Nothing here yet. Add a computer by its ID, or connect to one: you can keep it afterwards.";
+                color: Theme.subtle;
+                font-size: 14px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        if root.items.length > 0: Flickable {
+            content-width: self.width;
+            content-height: Math.max(self.height, book-list.preferred-height);
+            book-list := BookList {
+                width: parent.width;
+                padding: 10px;
+                items: root.items;
+                connect(id) => { root.connect(id); }
+                edit(id) => { root.edit(id); }
+                remove(id) => { root.remove(id); }
+            }
+        }
+    }
+}

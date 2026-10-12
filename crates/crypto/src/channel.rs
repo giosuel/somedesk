@@ -4,13 +4,14 @@
 //!
 //! ```text
 //!   -> e
-//!   <- e, ee, s, es   + responder's DeviceCert (encrypted)
-//!   -> s, se          + initiator's DeviceCert (encrypted)
+//!   <- e, ee, s, es   + responder's DeviceIdentity (encrypted)
+//!   -> s, se          + initiator's DeviceIdentity (encrypted)
 //! ```
 //!
-//! Each side checks that the peer's certificate is validly signed and certifies exactly the
-//! static key the peer proved possession of. Ephemeral keys give forward secrecy. The relay
-//! between the two sides only ever sees handshake messages and ciphertext.
+//! Each side checks that the peer's identity names exactly the static key the peer proved
+//! possession of, and that an account certificate in it is validly signed and certifies that
+//! key. Ephemeral keys give forward secrecy. The relay between the two sides only ever sees
+//! handshake messages and ciphertext.
 //!
 //! Application messages are serialized with postcard and split into chunks that fit a Noise
 //! message (≤ 65535 bytes). The first plaintext byte of every chunk is 1 if more chunks of the
@@ -19,7 +20,7 @@
 use crate::keys::{verify_device_cert, DeviceKey};
 use serde::{de::DeserializeOwned, Serialize};
 use snow::{Builder, StatelessTransportState};
-use somedesk_proto::control::DeviceCert;
+use somedesk_proto::control::DeviceIdentity;
 use somedesk_proto::frame::{read_raw, write_raw, FrameError};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -50,8 +51,11 @@ pub enum ChannelError {
 pub struct Handshaked<R, W> {
     pub sender: SecureSender<W>,
     pub receiver: SecureReceiver<R>,
-    /// The verified certificate of the peer.
-    pub peer: DeviceCert,
+    /// The verified identity of the peer.
+    pub peer: DeviceIdentity,
+    /// The Noise handshake hash: unique to this channel and known only to its two ends. Binding
+    /// an authentication run inside the channel to it ties that run to this very channel.
+    pub handshake_hash: [u8; 32],
 }
 
 fn builder<'a>(key: &'a DeviceKey, prologue: &'a [u8]) -> Builder<'a> {
@@ -61,22 +65,37 @@ fn builder<'a>(key: &'a DeviceKey, prologue: &'a [u8]) -> Builder<'a> {
 }
 
 fn check_peer(
-    cert_bytes: &[u8],
+    identity_bytes: &[u8],
     remote_static: Option<&[u8]>,
     expected: Option<&[u8; 32]>,
-) -> Result<DeviceCert, ChannelError> {
-    let cert: DeviceCert =
-        postcard::from_bytes(cert_bytes).map_err(|_| ChannelError::BadPeer("unreadable certificate".into()))?;
-    verify_device_cert(&cert).map_err(|e| ChannelError::BadPeer(e.to_string()))?;
-    if remote_static != Some(cert.device_pk.as_slice()) {
-        return Err(ChannelError::BadPeer("certificate does not match the handshake key".into()));
+) -> Result<DeviceIdentity, ChannelError> {
+    let identity: DeviceIdentity =
+        postcard::from_bytes(identity_bytes).map_err(|_| ChannelError::BadPeer("unreadable identity".into()))?;
+    if remote_static != Some(identity.device_pk.as_slice()) {
+        return Err(ChannelError::BadPeer("identity does not match the handshake key".into()));
+    }
+    if let Some(cert) = &identity.account {
+        verify_device_cert(cert).map_err(|e| ChannelError::BadPeer(e.to_string()))?;
+        if cert.device_pk != identity.device_pk {
+            return Err(ChannelError::BadPeer("account certificate is for another device".into()));
+        }
+    }
+    if let Some(cert) = &identity.org {
+        crate::org::verify_device_cert(cert).map_err(|e| ChannelError::BadPeer(e.to_string()))?;
+        if cert.device_pk != identity.device_pk {
+            return Err(ChannelError::BadPeer("organisation certificate is for another device".into()));
+        }
     }
     if let Some(expected) = expected {
-        if expected != &cert.device_pk {
+        if expected != &identity.device_pk {
             return Err(ChannelError::BadPeer("peer is not the expected device".into()));
         }
     }
-    Ok(cert)
+    Ok(identity)
+}
+
+fn handshake_hash(hs: &snow::HandshakeState) -> [u8; 32] {
+    hs.get_handshake_hash().try_into().expect("BLAKE2s hashes are 32 bytes")
 }
 
 async fn read_hs<R: AsyncRead + Unpin>(r: &mut R) -> Result<Vec<u8>, ChannelError> {
@@ -92,7 +111,7 @@ pub async fn initiate<R, W>(
     mut w: W,
     prologue: &[u8],
     key: &DeviceKey,
-    cert: &DeviceCert,
+    own: &DeviceIdentity,
     expected_peer: Option<&[u8; 32]>,
 ) -> Result<Handshaked<R, W>, ChannelError>
 where
@@ -110,12 +129,18 @@ where
     let n = hs.read_message(&msg, &mut payload)?;
     let peer = check_peer(&payload[..n], hs.get_remote_static(), expected_peer)?;
 
-    let own = postcard::to_stdvec(cert).map_err(|_| ChannelError::Malformed)?;
+    let own = postcard::to_stdvec(own).map_err(|_| ChannelError::Malformed)?;
     let n = hs.write_message(&own, &mut buf)?;
     write_raw(&mut w, &buf[..n]).await?;
 
+    let handshake_hash = handshake_hash(&hs);
     let t = Arc::new(hs.into_stateless_transport_mode()?);
-    Ok(Handshaked { sender: SecureSender::new(w, t.clone()), receiver: SecureReceiver::new(r, t), peer })
+    Ok(Handshaked {
+        sender: SecureSender::new(w, t.clone()),
+        receiver: SecureReceiver::new(r, t),
+        peer,
+        handshake_hash,
+    })
 }
 
 /// Runs the handshake as the accepting side (host).
@@ -124,7 +149,7 @@ pub async fn respond<R, W>(
     mut w: W,
     prologue: &[u8],
     key: &DeviceKey,
-    cert: &DeviceCert,
+    own: &DeviceIdentity,
     expected_peer: Option<&[u8; 32]>,
 ) -> Result<Handshaked<R, W>, ChannelError>
 where
@@ -138,7 +163,7 @@ where
     let msg = read_hs(&mut r).await?;
     hs.read_message(&msg, &mut payload)?;
 
-    let own = postcard::to_stdvec(cert).map_err(|_| ChannelError::Malformed)?;
+    let own = postcard::to_stdvec(own).map_err(|_| ChannelError::Malformed)?;
     let n = hs.write_message(&own, &mut buf)?;
     write_raw(&mut w, &buf[..n]).await?;
 
@@ -146,8 +171,14 @@ where
     let n = hs.read_message(&msg, &mut payload)?;
     let peer = check_peer(&payload[..n], hs.get_remote_static(), expected_peer)?;
 
+    let handshake_hash = handshake_hash(&hs);
     let t = Arc::new(hs.into_stateless_transport_mode()?);
-    Ok(Handshaked { sender: SecureSender::new(w, t.clone()), receiver: SecureReceiver::new(r, t), peer })
+    Ok(Handshaked {
+        sender: SecureSender::new(w, t.clone()),
+        receiver: SecureReceiver::new(r, t),
+        peer,
+        handshake_hash,
+    })
 }
 
 /// Sending half of an established channel.
@@ -252,14 +283,21 @@ mod tests {
 
     struct Party {
         key: DeviceKey,
-        cert: DeviceCert,
+        id: DeviceIdentity,
     }
 
+    /// A device signed in to `user`'s account.
     fn party(user: &str) -> Party {
-        let id = IdentityKey::generate();
+        let account = IdentityKey::generate();
         let key = DeviceKey::generate();
-        let cert = id.certify_device(user, key.public(), "pc", 0);
-        Party { key, cert }
+        let cert = account.certify_device(user, key.public(), "pc", 0);
+        Party { id: DeviceIdentity { device_pk: key.public(), name: "pc".into(), account: Some(cert), org: None }, key }
+    }
+
+    /// A device without an account.
+    fn anonymous(name: &str) -> Party {
+        let key = DeviceKey::generate();
+        Party { id: DeviceIdentity { device_pk: key.public(), name: name.into(), account: None, org: None }, key }
     }
 
     type Hs = Handshaked<ReadHalf<DuplexStream>, WriteHalf<DuplexStream>>;
@@ -269,8 +307,8 @@ mod tests {
         let (xr, xw) = split(x);
         let (yr, yw) = split(y);
         let (i, r) = tokio::join!(
-            initiate(xr, xw, b"session-1", &a.key, &a.cert, Some(&b.cert.device_pk)),
-            respond(yr, yw, b"session-1", &b.key, &b.cert, None),
+            initiate(xr, xw, b"session-1", &a.key, &a.id, Some(&b.id.device_pk)),
+            respond(yr, yw, b"session-1", &b.key, &b.id, None),
         );
         (i.unwrap(), r.unwrap())
     }
@@ -279,8 +317,44 @@ mod tests {
     async fn handshake_authenticates_both_sides() {
         let (alice, bob) = (party("alice"), party("bob"));
         let (i, r) = connect(&alice, &bob).await;
-        assert_eq!(i.peer, bob.cert);
-        assert_eq!(r.peer, alice.cert);
+        assert_eq!(i.peer, bob.id);
+        assert_eq!(r.peer, alice.id);
+        assert_eq!(i.handshake_hash, r.handshake_hash, "both ends share the handshake hash");
+    }
+
+    #[tokio::test]
+    async fn devices_without_an_account_connect() {
+        let (a, b) = (anonymous("laptop"), party("bob"));
+        let (i, r) = connect(&a, &b).await;
+        assert_eq!(r.peer, a.id);
+        assert_eq!(i.peer.username(), Some("bob"));
+        let (c, d) = (anonymous("x"), anonymous("y"));
+        let (i2, _) = connect(&c, &d).await;
+        assert_ne!(i.handshake_hash, i2.handshake_hash, "every channel has its own hash");
+    }
+
+    #[tokio::test]
+    async fn account_certificate_for_another_device_is_rejected() {
+        let (alice, bob) = (party("alice"), party("bob"));
+        // Mallory's own key, but bob's account certificate (for bob's device key).
+        let key = DeviceKey::generate();
+        let mallory = Party {
+            id: DeviceIdentity {
+                device_pk: key.public(),
+                name: "pc".into(),
+                account: bob.id.account.clone(),
+                org: None,
+            },
+            key,
+        };
+        let (x, y) = duplex(1 << 16);
+        let (xr, xw) = split(x);
+        let (yr, yw) = split(y);
+        let (i, _r) = tokio::join!(
+            initiate(xr, xw, b"s", &alice.key, &alice.id, None),
+            respond(yr, yw, b"s", &mallory.key, &mallory.id, None),
+        );
+        assert!(matches!(i, Err(ChannelError::BadPeer(_))));
     }
 
     #[tokio::test]
@@ -315,8 +389,8 @@ mod tests {
         let (yr, yw) = split(y);
         // Alice expects carol, but bob answers (e.g. a malicious relay redirected the session).
         let (i, _r) = tokio::join!(
-            initiate(xr, xw, b"s", &alice.key, &alice.cert, Some(&carol.cert.device_pk)),
-            respond(yr, yw, b"s", &bob.key, &bob.cert, None),
+            initiate(xr, xw, b"s", &alice.key, &alice.id, Some(&carol.id.device_pk)),
+            respond(yr, yw, b"s", &bob.key, &bob.id, None),
         );
         assert!(matches!(i, Err(ChannelError::BadPeer(_))));
     }
@@ -324,14 +398,14 @@ mod tests {
     #[tokio::test]
     async fn stolen_certificate_without_key_is_rejected() {
         let (alice, bob) = (party("alice"), party("bob"));
-        // Mallory presents bob's certificate but only has her own static key.
-        let mallory = Party { key: DeviceKey::generate(), cert: bob.cert.clone() };
+        // Mallory presents bob's identity but only has her own static key.
+        let mallory = Party { key: DeviceKey::generate(), id: bob.id.clone() };
         let (x, y) = duplex(1 << 16);
         let (xr, xw) = split(x);
         let (yr, yw) = split(y);
         let (i, _r) = tokio::join!(
-            initiate(xr, xw, b"s", &alice.key, &alice.cert, None),
-            respond(yr, yw, b"s", &mallory.key, &mallory.cert, None),
+            initiate(xr, xw, b"s", &alice.key, &alice.id, None),
+            respond(yr, yw, b"s", &mallory.key, &mallory.id, None),
         );
         assert!(matches!(i, Err(ChannelError::BadPeer(_))));
     }
@@ -343,8 +417,8 @@ mod tests {
         let (xr, xw) = split(x);
         let (yr, yw) = split(y);
         let (i, r) = tokio::join!(
-            initiate(xr, xw, b"session-A", &alice.key, &alice.cert, None),
-            respond(yr, yw, b"session-B", &bob.key, &bob.cert, None),
+            initiate(xr, xw, b"session-A", &alice.key, &alice.id, None),
+            respond(yr, yw, b"session-B", &bob.key, &bob.id, None),
         );
         assert!(i.is_err() || r.is_err());
     }
@@ -370,8 +444,8 @@ mod tests {
         let (ar, aw) = split(a_side);
         let (br, bw) = split(b_side);
         let (i, r) = tokio::join!(
-            initiate(ar, aw, b"s", &alice.key, &alice.cert, None),
-            respond(br, bw, b"s", &bob.key, &bob.cert, None),
+            initiate(ar, aw, b"s", &alice.key, &alice.id, None),
+            respond(br, bw, b"s", &bob.key, &bob.id, None),
         );
         let (mut i, mut r) = (i.unwrap(), r.unwrap());
         let secret = b"TOP-SECRET-CLIPBOARD-CONTENT-0123456789".to_vec();
@@ -409,8 +483,8 @@ mod tests {
         let (ar, aw) = split(a_side);
         let (br, bw) = split(b_side);
         let (i, r) = tokio::join!(
-            initiate(ar, aw, b"s", &alice.key, &alice.cert, None),
-            respond(br, bw, b"s", &bob.key, &bob.cert, None),
+            initiate(ar, aw, b"s", &alice.key, &alice.id, None),
+            respond(br, bw, b"s", &bob.key, &bob.id, None),
         );
         let (mut i, mut r) = (i.unwrap(), r.unwrap());
         flip.store(true, std::sync::atomic::Ordering::SeqCst);

@@ -31,12 +31,16 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
     pub database_url: String,
     pub data_dir: PathBuf,
+    /// Let devices without an account come online (and get an ID). Otherwise only devices
+    /// signed in to one of this server's accounts can.
+    pub open: bool,
     pub relay_tap: Option<RelayTap>,
 }
 
 pub(crate) struct Online {
     pub conn_id: u64,
-    pub user_id: i64,
+    /// The account the device is signed in to.
+    pub user_id: Option<i64>,
     pub tx: mpsc::UnboundedSender<ServerFrame>,
     /// Addresses peers may try for a direct connection; empty if the device only wants the relay.
     pub candidates: Vec<SocketAddr>,
@@ -45,6 +49,7 @@ pub(crate) struct Online {
 pub(crate) struct Shared {
     pub db: PgPool,
     pub opaque: ServerSetup,
+    pub open: bool,
     pub online: DashMap<u64, Online>,
     pub sessions: Mutex<HashMap<SessionId, relay::PendingSession>>,
     pub limiter: ratelimit::RateLimiter,
@@ -83,6 +88,7 @@ pub async fn start(config: ServerConfig) -> anyhow::Result<RunningServer> {
     let shared = Arc::new(Shared {
         db,
         opaque,
+        open: config.open,
         online: DashMap::new(),
         sessions: Mutex::new(HashMap::new()),
         limiter: ratelimit::RateLimiter::default(),

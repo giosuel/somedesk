@@ -23,6 +23,23 @@ pub struct MonitorInfo {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SessionMsg {
+    /// Viewer → host, the first message: asks to be let in. The person at the host decides,
+    /// unless the host lets the viewer in by its account or organisation.
+    AccessRequest,
+    /// Viewer → host, instead of `AccessRequest`: unattended access with the host's own
+    /// password (an OPAQUE request, see `somedesk_crypto::unattended`).
+    UnattendedStart {
+        request: Vec<u8>,
+    },
+    /// Host → viewer: the OPAQUE response.
+    UnattendedChallenge {
+        response: Vec<u8>,
+    },
+    /// Viewer → host: the OPAQUE finalization and the code from the host's authenticator app.
+    UnattendedFinish {
+        finalization: Vec<u8>,
+        code: String,
+    },
     /// Host → viewer: the user at the host accepted the connection.
     Accept,
     /// Host → viewer: the connection was refused.

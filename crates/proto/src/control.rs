@@ -10,6 +10,7 @@
 // Wire messages are short-lived (serialized right away), so variant size differences don't matter.
 #![allow(clippy::large_enum_variant)]
 
+use crate::org::{OrgDeviceCert, SignedPolicy};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
@@ -70,15 +71,27 @@ pub enum Request {
         key_bundle: EncryptedKeyBundle,
         recovery: RecoverySetup,
     },
-    /// Enrolls this machine. Requires a password login on this connection.
-    RegisterDevice {
+    /// Bringing a device online, step 1: asks for a challenge for this device key.
+    DeviceChallenge {
+        device_pk: [u8; 32],
+    },
+    /// Step 2: proves this connection holds the private device key (see
+    /// `somedesk_crypto::keys::DeviceKey::prove`). A key the server doesn't know yet is
+    /// registered under a new random ID, if the server lets devices without an account in.
+    /// Afterwards the device is online.
+    DeviceAuth {
+        name: String,
+        proof: [u8; 32],
+        /// A device enrolled into an organisation by a service worker presents its certificate.
+        org: Option<OrgDeviceCert>,
+    },
+    /// Signs this (online) device in to the account logged in on this connection: `cert` binds
+    /// the device key to the account. The device keeps its ID.
+    AttachDevice {
         cert: DeviceCert,
     },
-    /// Authenticates as an enrolled device and marks it online.
-    TokenAuth {
-        device_id: u64,
-        token: [u8; 32],
-    },
+    /// Signs this device out of its account. It keeps its ID.
+    DetachDevice,
     /// Where this device can be reached directly (its local addresses; the server adds the
     /// public address it sees). With `allow_direct: false` no addresses are shared with peers
     /// and sessions always use the relay.
@@ -90,11 +103,67 @@ pub enum Request {
     LookupDevice {
         device_id: u64,
     },
+    /// The encrypted vault (address book and saved passwords) of this connection's account.
+    GetVault,
+    /// Replaces the vault, if it is still at `base_version` (0: there is none yet).
+    PutVault {
+        base_version: u64,
+        blob: Vec<u8>,
+    },
+    /// What the server knows about this connection's account.
+    AccountInfo,
+    /// Starts turning on two-factor authentication. Requires a password login.
+    TotpBegin,
+    /// Turns it on, with a code from the authenticator app for the secret from `TotpBegin`.
+    TotpEnable {
+        code: String,
+    },
+    /// Turns it off, with a code (or with none, within minutes of logging in with one on this
+    /// connection).
+    TotpDisable {
+        code: String,
+    },
+    /// Second step of a login on an account with two-factor authentication.
+    LoginTotp {
+        code: String,
+    },
+    /// An account's identity key (to add it to an organisation).
+    LookupUser {
+        username: String,
+    },
+    /// Creates an organisation with this account as its admin. `sealed_key`: the organisation's
+    /// private key, sealed to the account's identity key.
+    CreateOrg {
+        name: String,
+        org_pk: [u8; 32],
+        sealed_key: Vec<u8>,
+    },
+    /// The organisations this account belongs to.
+    ListOrgs,
+    /// Publishes a new policy. Only admins of the current policy can.
+    PutOrgPolicy {
+        org_id: u64,
+        policy: SignedPolicy,
+    },
+    /// Gives another admin the organisation's key (sealed to their identity key).
+    ShareOrgKey {
+        org_id: u64,
+        username: String,
+        sealed_key: Vec<u8>,
+    },
+    /// The current policy: for members, and for the organisation's own devices.
+    GetOrgPolicy {
+        org_id: u64,
+    },
+    /// The devices enrolled into an organisation (for its members).
+    ListOrgDevices {
+        org_id: u64,
+    },
     /// Asks the server to set up a relayed session to `device_id`.
     Connect {
         device_id: u64,
     },
-    /// Removes one of the caller's own devices (also usable to sign out the current one).
+    /// Takes one of the account's devices off the account. It keeps its ID.
     RemoveDevice {
         device_id: u64,
     },
@@ -133,15 +202,41 @@ pub enum Response {
         recovery_bundle: EncryptedKeyBundle,
         message: Vec<u8>,
     },
-    DeviceRegistered {
-        device_id: u64,
-        token: [u8; 32],
+    DeviceChallenge {
+        /// The server's one-time X25519 key and nonce for this challenge.
+        server_pk: [u8; 32],
+        nonce: [u8; 32],
     },
+    /// The device is online.
     Authenticated {
-        username: String,
         device: DeviceInfo,
     },
     Devices(Vec<DeviceInfo>),
+    Vault {
+        version: u64,
+        blob: Vec<u8>,
+    },
+    VaultSaved {
+        version: u64,
+    },
+    Account {
+        username: String,
+        totp_enabled: bool,
+    },
+    TotpSecret {
+        secret: Vec<u8>,
+    },
+    /// The password was right; the code from the authenticator app comes next (`LoginTotp`).
+    TotpRequired,
+    User {
+        username: String,
+        identity_pk: [u8; 32],
+    },
+    OrgCreated {
+        org_id: u64,
+    },
+    Orgs(Vec<OrgInfo>),
+    OrgPolicy(Option<SignedPolicy>),
     Device(DeviceInfo),
     /// `candidates`: addresses where the host might be reached directly (empty: relay only).
     Connect {
@@ -159,6 +254,12 @@ pub enum Event {
     IncomingSession { session_id: SessionId, from: DeviceInfo, candidates: Vec<SocketAddr> },
     /// Presence of one of our own devices changed.
     DevicePresence { device_id: u64, online: bool },
+    /// This device was taken off its account (from another device). It keeps its ID.
+    SignedOut,
+    /// An organisation this device or account belongs to has a new policy.
+    OrgPolicyChanged { org_id: u64 },
+    /// The account changed (two-factor authentication turned on or off): ask `AccountInfo`.
+    AccountChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +273,10 @@ pub enum ErrorCode {
     NotFound,
     Offline,
     RateLimited,
+    /// Not allowed, e.g. a server that only lets its accounts' devices in.
+    Forbidden,
+    /// Changed in the meantime (e.g. the vault, by another device): read it again and retry.
+    Conflict,
     Internal,
 }
 
@@ -252,13 +357,44 @@ impl DeviceCert {
     }
 }
 
+/// Who a device is: its key, the name it gives itself and, when it is signed in to an account,
+/// the account's certificate for it. This is what each side presents in the Noise handshake (and
+/// checks there itself); the server hands out the same for lookups.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceIdentity {
+    /// X25519 public key the device uses in Noise handshakes.
+    pub device_pk: [u8; 32],
+    /// Chosen by the device; only meaningful together with its ID or account.
+    pub name: String,
+    /// The account's certificate for `device_pk`, if the device is signed in to one.
+    pub account: Option<DeviceCert>,
+    /// The organisation's certificate for `device_pk`, if a service worker enrolled the device.
+    pub org: Option<OrgDeviceCert>,
+}
+
+impl DeviceIdentity {
+    /// The account the device is signed in to.
+    pub fn username(&self) -> Option<&str> {
+        self.account.as_ref().map(|c| c.username.as_str())
+    }
+}
+
+/// An organisation as one of its members sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgInfo {
+    pub org_id: u64,
+    pub name: String,
+    pub org_pk: [u8; 32],
+    /// The organisation's key, sealed to this account's identity key (admins only).
+    pub sealed_key: Option<Vec<u8>>,
+    pub policy: Option<SignedPolicy>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceInfo {
     pub device_id: u64,
-    pub username: String,
-    pub name: String,
     pub online: bool,
-    pub cert: DeviceCert,
+    pub identity: DeviceIdentity,
 }
 
 /// First frame on every direct (peer-to-peer) stream, naming the session it belongs to.

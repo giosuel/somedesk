@@ -18,6 +18,9 @@ struct Args {
     /// Use the phone layout (as on Android), for trying it out on a desktop.
     #[arg(long, env = "SOMEDESK_MOBILE_UI")]
     mobile_ui: bool,
+    /// Start in the background, without showing the window (used when starting at login).
+    #[arg(long)]
+    background: bool,
 }
 
 /// Where credentials and settings live: `$XDG_DATA_HOME/somedesk` on Linux, `%APPDATA%\somedesk`
@@ -42,5 +45,6 @@ fn main() -> anyhow::Result<()> {
         data_dir: data_dir(&args.profile),
         server: args.server,
         mobile: args.mobile_ui,
+        background: args.background,
     })
 }

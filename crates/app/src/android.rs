@@ -33,7 +33,7 @@ pub fn main(app: AndroidApp) {
         tracing::error!("cannot start the UI: {e}");
         std::process::exit(1);
     }
-    if let Err(e) = crate::run(crate::Options { data_dir, server: None, mobile: true }) {
+    if let Err(e) = crate::run(crate::Options { data_dir, server: None, mobile: true, background: false }) {
         tracing::error!("{e:#}");
     }
     std::process::exit(0);
