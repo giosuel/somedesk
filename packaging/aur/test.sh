@@ -33,8 +33,8 @@ fi
         # The release tarball, as .github/workflows/release.yml makes it.
         src="/home/builder/somedesk/src/somedesk-$version" name="SomeDesk-$version-linux-x64"
         mkdir -p "/tmp/$name/packaging/linux" "/tmp/$name/assets/brand"
-        cp "$src/target/release/somedesk" "$src/README.md" "$src/LICENSE" "/tmp/$name/"
-        strip "/tmp/$name/somedesk"
+        cp "$src/target/release/somedesk" "$src/target/release/somedesk-agent" "$src/README.md" "$src/LICENSE" "/tmp/$name/"
+        strip "/tmp/$name/somedesk" "/tmp/$name/somedesk-agent"
         cp "$src"/packaging/linux/ch.giosuel.SomeDesk.* "/tmp/$name/packaging/linux/"
         cp "$src/assets/brand/app-icon.svg" "/tmp/$name/assets/brand/"
         tar -C /tmp -czf "/home/builder/somedesk-bin/$name.tar.gz" "$name"
@@ -49,6 +49,7 @@ fi
     namcap ./*.pkg.tar.zst
     pacman -U --noconfirm ./"$pkg"-[0-9]*.pkg.tar.zst >/dev/null
     somedesk --version
+    somedesk-agent --help >/dev/null
     pacman -Ql "$pkg" | grep -v "/$"
     pacman -R --noconfirm "$pkg" >/dev/null
   done

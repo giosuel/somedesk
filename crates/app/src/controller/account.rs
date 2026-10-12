@@ -383,6 +383,8 @@ impl Controller {
     }
 
     fn totp_disable(&self) {
+        // Always with a fresh sign-in: the server only takes no code within a few minutes of one.
+        self.0.state.lock().unwrap().login = None;
         self.with_login(
             "Confirm with your password and a code to turn off two-factor authentication.",
             |this, conn, _login| {

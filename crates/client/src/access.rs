@@ -169,6 +169,9 @@ impl Unattended {
                 if wait < 90 { format!("{wait} seconds") } else { format!("{} minutes", (wait + 59) / 60) }
             )));
         }
+        // The viewer can tell from the challenge alone whether its password was right, so the
+        // attempt counts from here on; one abandoned after the challenge stays counted.
+        self.record_failure();
         let record = HostRecord { setup: config.opaque_setup.clone(), password_file: config.password_file.clone() };
         let (response, state) = opaque::host_start(&record, host_pk, &ch.handshake_hash, request)?;
         ch.sender.send(&SessionMsg::UnattendedChallenge { response }).await?;
@@ -192,7 +195,6 @@ impl Unattended {
             }
             _ => {
                 tracing::warn!("wrong unattended-access password or code");
-                self.record_failure();
                 Ok(Verdict::Rejected("Wrong password or code.".into()))
             }
         }
@@ -241,12 +243,26 @@ pub async fn sign_in_unattended(ch: &mut Channel, password: &str, code: &str) ->
         Some(SessionMsg::Reject { reason }) => return Err(ClientError::Rejected(reason)),
         _ => return Err(ClientError::Protocol("expected the host's answer")),
     };
-    // A wrong password fails here already; the host still gets a finalization (and counts the
-    // attempt), so a guesser learns nothing from timing.
-    let finalization =
-        opaque::viewer_finish(state, password, &host_pk, &ch.handshake_hash, &response).unwrap_or_else(|_| vec![0; 64]);
-    ch.sender.send(&SessionMsg::UnattendedFinish { finalization, code: code.to_owned() }).await?;
+    // A wrong password (or a host that isn't the one we meant) fails here already. The host still
+    // gets a finalization, so a guesser learns nothing from timing, but not the code: it is still
+    // valid, and must not reach an impostor.
+    let (finalization, code) = match opaque::viewer_finish(state, password, &host_pk, &ch.handshake_hash, &response) {
+        Ok(finalization) => (finalization, code.to_owned()),
+        Err(_) => (vec![0; 64], String::new()),
+    };
+    ch.sender.send(&SessionMsg::UnattendedFinish { finalization, code }).await?;
     Ok(())
+}
+
+/// `peer` (from the handshake) with its account only if the server, which checked that account's
+/// password or key, saw the device signed in to the same one. A certificate alone proves nothing
+/// about a username: anyone can sign one for "alice" with a key of their own.
+pub fn verified_identity(peer: &DeviceIdentity, from_server: &DeviceIdentity) -> DeviceIdentity {
+    let mut peer = peer.clone();
+    if peer.account != from_server.account {
+        peer.account = None;
+    }
+    peer
 }
 
 /// Whether `peer` is a device of the same account as `own_identity_pk` (its certificate is
@@ -284,6 +300,31 @@ mod tests {
         assert!(again.enabled());
         s.disable().unwrap();
         assert!(!Unattended::load(&s.path).unwrap().enabled());
+    }
+
+    #[test]
+    fn only_usernames_the_server_saw_too_count() {
+        use somedesk_proto::control::DeviceCert;
+        let signed_in = |username: &str, identity_pk: u8| DeviceIdentity {
+            device_pk: [7; 32],
+            name: "pc".into(),
+            account: Some(DeviceCert {
+                username: username.into(),
+                identity_pk: [identity_pk; 32],
+                device_pk: [7; 32],
+                device_name: "pc".into(),
+                created_at: 0,
+                signature: vec![],
+            }),
+            org: None,
+        };
+        let alice = signed_in("alice", 1);
+        assert_eq!(verified_identity(&alice, &alice).username(), Some("alice"));
+        // A certificate for "alice" signed with someone else's key, or by a device the server
+        // knows as not signed in at all.
+        let claimed = signed_in("alice", 2);
+        assert_eq!(verified_identity(&claimed, &alice).username(), None);
+        assert_eq!(verified_identity(&claimed, &DeviceIdentity { account: None, ..alice.clone() }).username(), None);
     }
 
     #[test]

@@ -19,7 +19,7 @@ sha256sums_x86_64=('SKIP')
 
 package() {
   cd "SomeDesk-$pkgver-linux-x64"
-  install -Dm755 somedesk -t "$pkgdir/usr/bin"
+  install -Dm755 somedesk somedesk-agent -t "$pkgdir/usr/bin"
   install -Dm644 packaging/linux/ch.giosuel.SomeDesk.desktop -t "$pkgdir/usr/share/applications"
   install -Dm644 packaging/linux/ch.giosuel.SomeDesk.metainfo.xml -t "$pkgdir/usr/share/metainfo"
   install -Dm644 assets/brand/app-icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/ch.giosuel.SomeDesk.svg"
