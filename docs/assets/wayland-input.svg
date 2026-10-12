@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 960 260" width="960" height="260" role="img" aria-labelledby="t d">
+  <title id="t">How the host reaches the screen and the input on Wayland</title>
+  <desc id="d">On GNOME and KDE, the desktop portal carries both the screen and the input. On Hyprland, Sway and other wlroots-style desktops, the portal only carries the screen; input goes to the compositor through its virtual pointer and virtual keyboard.</desc>
+  <style>
+    text { font-family: Geist, Inter, "Segoe UI", system-ui, sans-serif; }
+    .in, .out { opacity: 0; animation: move 2.4s linear infinite; }
+    .in.a { offset-path: path("M190 92 H740"); }
+    .in.b { offset-path: path("M190 242 H740"); }
+    .out.a { offset-path: path("M740 108 H190"); }
+    .out.b { offset-path: path("M740 192 H190"); }
+    .d2 { animation-delay: 1.2s; }
+    @keyframes move { 0% { offset-distance: 0%; opacity: 0; } 8%, 92% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) { .in, .out { animation: none; opacity: 0; } }
+  </style>
+
+  <!-- The host. -->
+  <rect x="40" y="60" width="150" height="200" rx="14" fill="#16181d" stroke="#2a2e36"/>
+  <text x="115" y="152" font-size="15" font-weight="600" fill="#d9dde3" text-anchor="middle">SomeDesk</text>
+  <text x="115" y="171" font-size="11.5" fill="#8a919c" text-anchor="middle">host</text>
+
+  <!-- GNOME, KDE: the portal carries both. -->
+  <path d="M190 92 H740" stroke="#22252c" stroke-width="3"/>
+  <path d="M190 108 H740" stroke="#22252c" stroke-width="3"/>
+  <rect x="380" y="70" width="200" height="56" rx="12" fill="#14161b" stroke="#2a2e36"/>
+  <text x="480" y="94" font-size="13" font-weight="600" fill="#d9dde3" text-anchor="middle">Desktop portal</text>
+  <text x="480" y="111" font-size="11" fill="#8a919c" text-anchor="middle">screen + input</text>
+  <rect x="740" y="66" width="180" height="64" rx="12" fill="#16181d" stroke="#2a2e36"/>
+  <text x="830" y="94" font-size="13.5" font-weight="600" fill="#d9dde3" text-anchor="middle">GNOME, KDE</text>
+  <text x="830" y="112" font-size="11" fill="#8a919c" text-anchor="middle">Mutter, KWin</text>
+
+  <!-- Hyprland, Sway: the portal carries the screen, the virtual devices the input. -->
+  <path d="M190 192 H740" stroke="#22252c" stroke-width="3"/>
+  <path d="M190 242 H740" stroke="#7dd3c0" stroke-opacity=".35" stroke-width="3"/>
+  <rect x="380" y="172" width="200" height="40" rx="12" fill="#14161b" stroke="#2a2e36"/>
+  <text x="480" y="191" font-size="13" font-weight="600" fill="#d9dde3" text-anchor="middle">Desktop portal</text>
+  <text x="480" y="205" font-size="11" fill="#8a919c" text-anchor="middle">screen only</text>
+  <rect x="380" y="226" width="200" height="32" rx="12" fill="#14161b" stroke="#7dd3c0"/>
+  <text x="480" y="246.5" font-size="12" font-weight="600" fill="#b4f5e4" text-anchor="middle">virtual pointer + keyboard</text>
+  <rect x="740" y="180" width="180" height="74" rx="12" fill="#16181d" stroke="#2a2e36"/>
+  <text x="830" y="211" font-size="13.5" font-weight="600" fill="#d9dde3" text-anchor="middle">Hyprland, Sway</text>
+  <text x="830" y="229" font-size="11" fill="#8a919c" text-anchor="middle">river, Wayfire, …</text>
+
+  <!-- Input (teal) goes to the desktop, frames (blue) come back. -->
+  <circle class="in a" r="4.5" fill="#7dd3c0"/>
+  <circle class="in a d2" r="4.5" fill="#7dd3c0"/>
+  <circle class="in b" r="4.5" fill="#7dd3c0"/>
+  <circle class="in b d2" r="4.5" fill="#7dd3c0"/>
+  <rect class="out a" x="-10" y="-3.5" width="20" height="7" rx="3.5" fill="#3fa2c4"/>
+  <rect class="out a d2" x="-10" y="-3.5" width="20" height="7" rx="3.5" fill="#3fa2c4"/>
+  <rect class="out b" x="-10" y="-3.5" width="20" height="7" rx="3.5" fill="#3fa2c4"/>
+  <rect class="out b d2" x="-10" y="-3.5" width="20" height="7" rx="3.5" fill="#3fa2c4"/>
+
+  <g font-size="11" fill="#8a919c">
+    <circle cx="44" cy="286" r="4" fill="#7dd3c0"/><text x="54" y="290">input</text>
+    <rect x="98" y="282.5" width="16" height="7" rx="3.5" fill="#3fa2c4"/><text x="120" y="290">screen</text>
+  </g>
+</svg>

@@ -38,7 +38,9 @@ Download the package for your system from the
     ```
 
     On X11 it works out of the box. On Wayland, the desktop asks for permission the first time
-    someone connects: choose **Share** and switch on **Allow Remote Interaction**. See [Linux desktops](platforms.md#linux-desktops).
+    someone connects: choose **Share** and switch on **Allow Remote Interaction**. On Hyprland and
+    Sway, pick the screen to share; control works without a further question. See
+    [Linux desktops](platforms.md#linux-desktops).
 
 === "Windows"
 

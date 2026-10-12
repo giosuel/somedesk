@@ -21,8 +21,16 @@ ndk-context = "0.1"
 ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "remote_desktop", "screencast"] }
 enumflags2 = "0.7.12"
 pipewire = "0.10.1"
+rustix = { version = "1", features = ["fs"] }
 tokio = { workspace = true }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 x11rb = { version = "0.13", features = ["xtest", "randr"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+xkbcommon = "0.9"
 
 [target."cfg(windows)".dependencies]
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

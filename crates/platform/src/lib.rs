@@ -1,7 +1,7 @@
 //! Platform backends: screen capture, input injection and the clipboard.
 //!
 //! Backends implement [`Capturer`], [`Injector`] and [`Clipboard`]: Linux X11, Linux Wayland (via
-//! the xdg-desktop-portal), Windows (GDI + SendInput) and macOS (CoreGraphics). Android only
+//! the xdg-desktop-portal, plus the virtual input protocols on wlroots-style compositors), Windows (GDI + SendInput) and macOS (CoreGraphics). Android only
 //! has a clipboard: the app there views other computers but does not share its own screen.
 
 #[cfg(target_os = "android")]
@@ -104,8 +104,10 @@ pub const fn can_share_screen() -> bool {
 pub struct Screen {
     pub capturer: Box<dyn Capturer>,
     pub injector: Box<dyn Injector>,
-    /// False if the person at the computer allowed viewing but not remote input.
+    /// False if the screen is shared view-only: see `view_only_reason`.
     pub can_control: bool,
+    /// Why the screen is shared view-only, for the person at the computer.
+    pub view_only_reason: Option<&'static str>,
     /// Human-readable backend name, for logs.
     pub backend: &'static str,
 }
@@ -159,6 +161,7 @@ pub fn open_screen(state_dir: Option<&std::path::Path>) -> anyhow::Result<Screen
                 capturer: Box::new(linux::x11::X11Capturer::open(None)?),
                 injector: Box::new(linux::x11::X11Injector::open(None)?),
                 can_control: true,
+                view_only_reason: None,
                 backend: "x11",
             }),
             LinuxBackend::Portal => {
@@ -175,11 +178,38 @@ pub fn open_screen(state_dir: Option<&std::path::Path>) -> anyhow::Result<Screen
                     }
                 }
                 let can_control = session.can_control();
+                let has_remote_input = session.has_remote_input();
+                let (position, size) = (session.position(), session.size());
                 let (capturer, injector) = session.split();
+                // Hyprland, Sway and other wlroots-style compositors share the screen through
+                // the portal but take input through their virtual pointer and keyboard
+                // protocols. (Only when the portal has no remote input at all: if the person at
+                // the computer declined control, it stays declined.)
+                if !has_remote_input {
+                    match linux::wlr::WlrInjector::open(position, size) {
+                        Ok(wlr) => {
+                            tracing::info!("remote input through the compositor's virtual pointer and keyboard");
+                            return Ok(Screen {
+                                capturer: Box::new(capturer),
+                                injector: Box::new(wlr),
+                                can_control: true,
+                                view_only_reason: None,
+                                backend: "portal+virtual-input",
+                            });
+                        }
+                        Err(e) => tracing::info!("no virtual input either, sharing view-only: {e:#}"),
+                    }
+                }
+                let view_only_reason = match (can_control, has_remote_input) {
+                    (true, _) => None,
+                    (false, true) => Some("Remote control was not allowed"),
+                    (false, false) => Some("This desktop doesn't support remote control"),
+                };
                 Ok(Screen {
                     capturer: Box::new(capturer),
                     injector: Box::new(injector),
                     can_control,
+                    view_only_reason,
                     backend: "portal",
                 })
             }
@@ -192,6 +222,7 @@ pub fn open_screen(state_dir: Option<&std::path::Path>) -> anyhow::Result<Screen
             capturer: Box::new(win::GdiCapturer::open()?),
             injector: Box::new(win::SendInputInjector::open()?),
             can_control: true,
+            view_only_reason: None,
             backend: "windows-gdi",
         })
     }

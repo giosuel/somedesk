@@ -277,7 +277,8 @@ impl Controller {
             bring_to_front(ui);
         });
         if !screen.can_control {
-            self.toast("Remote control is not available here, so the screen is shared view-only", true);
+            let reason = screen.view_only_reason.unwrap_or("Remote control is not available here");
+            self.toast(format!("{reason}, so the screen is shared view-only"), true);
         }
         let clipboard = self.clipboard();
         let settings = HostSettings { view_only: !screen.can_control, ..Default::default() };

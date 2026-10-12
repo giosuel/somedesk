@@ -272,6 +272,10 @@ impl Agent {
         });
         let clipboard = somedesk_platform::default_clipboard().ok();
         let extras = somedesk_client::SessionExtras { clipboard, files: None };
+        if !screen.can_control {
+            let reason = screen.view_only_reason.unwrap_or("remote control is not available here");
+            tracing::warn!("sharing the screen view-only: {reason}");
+        }
         let settings = HostSettings { view_only: !screen.can_control, ..Default::default() };
         let result = host::serve(ch, screen.capturer, screen.injector, extras, settings, stop_rx).await;
         let _ = self.banner.upgrade_in_event_loop(|b| {

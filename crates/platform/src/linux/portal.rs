@@ -77,8 +77,10 @@ pub fn open(restore_token: Option<String>) -> anyhow::Result<PortalSession> {
         }),
         node_id: setup.node_id,
         size: setup.size,
+        position: setup.position,
         restore_token: setup.restore_token,
         can_control: setup.can_control,
+        has_remote_input: setup.has_remote_input,
     })
 }
 
@@ -89,14 +91,33 @@ pub struct PortalSession {
     node_id: u32,
     /// Logical size of the shared monitor, the coordinate space for absolute pointer motion.
     size: Option<(u32, u32)>,
+    /// Logical position of the shared monitor on the desktop, if the portal reports it.
+    position: Option<(i32, i32)>,
     restore_token: Option<String>,
     can_control: bool,
+    has_remote_input: bool,
 }
 
 impl PortalSession {
     /// Whether the user allowed remote input, not just viewing.
     pub fn can_control(&self) -> bool {
         self.can_control
+    }
+
+    /// Whether the desktop's portal offers remote input at all. Without it (Hyprland, Sway, ...)
+    /// input has to go another way, see [`super::wlr`].
+    pub fn has_remote_input(&self) -> bool {
+        self.has_remote_input
+    }
+
+    /// Logical position of the shared monitor on the desktop, if the portal reported it.
+    pub fn position(&self) -> Option<(i32, i32)> {
+        self.position
+    }
+
+    /// Logical size of the shared monitor, if the portal reported it.
+    pub fn size(&self) -> Option<(u32, u32)> {
+        self.size
     }
 
     /// Token that lets the next session start without asking again.
@@ -251,8 +272,10 @@ struct Setup {
     fd: OwnedFd,
     node_id: u32,
     size: Option<(u32, u32)>,
+    position: Option<(i32, i32)>,
     restore_token: Option<String>,
     can_control: bool,
+    has_remote_input: bool,
 }
 
 fn state(down: bool) -> KeyState {
@@ -267,7 +290,8 @@ fn state(down: bool) -> KeyState {
 /// until `input` closes.
 ///
 /// Uses a combined remote desktop + screen cast session where the desktop supports remote input
-/// (GNOME, KDE), and a screen-cast-only, view-only session where it doesn't (e.g. wlroots).
+/// (GNOME, KDE), and a screen-cast-only session where it doesn't (Hyprland, Sway and other
+/// wlroots-style compositors, which get their input through [`super::wlr`] instead).
 async fn portal_main(
     restore_token: Option<String>,
     setup_tx: std::sync::mpsc::Sender<anyhow::Result<Setup>>,
@@ -321,10 +345,11 @@ async fn remote_session(
         if !can_control {
             tracing::warn!(devices = ?response.devices(), "remote control was not granted, sharing view-only");
         }
-        let (node_id, size) = first_stream(response.streams())?;
+        let (node_id, size, position) = first_stream(response.streams())?;
         let fd = cast.open_pipe_wire_remote(&session, Default::default()).await?;
         let restore_token = response.restore_token().map(str::to_owned);
-        Ok::<_, anyhow::Error>((session, Setup { fd, node_id, size, restore_token, can_control }))
+        let setup = Setup { fd, node_id, size, position, restore_token, can_control, has_remote_input: true };
+        Ok::<_, anyhow::Error>((session, setup))
     }
     .await;
 
@@ -380,10 +405,11 @@ async fn cast_only_session(
         cast.select_sources(&session, options).await?.response()?;
         let response =
             wait_for_permission(async { cast.start(&session, None, Default::default()).await?.response() }).await?;
-        let (node_id, size) = first_stream(response.streams())?;
+        let (node_id, size, position) = first_stream(response.streams())?;
         let fd = cast.open_pipe_wire_remote(&session, Default::default()).await?;
         let restore_token = response.restore_token().map(str::to_owned);
-        Ok::<_, anyhow::Error>((session, Setup { fd, node_id, size, restore_token, can_control: false }))
+        let setup = Setup { fd, node_id, size, position, restore_token, can_control: false, has_remote_input: false };
+        Ok::<_, anyhow::Error>((session, setup))
     }
     .await;
 
@@ -427,10 +453,13 @@ async fn wait_for_permission<T>(
     }
 }
 
-fn first_stream(streams: &[ashpd::desktop::screencast::Stream]) -> anyhow::Result<(u32, Option<(u32, u32)>)> {
+type StreamInfo = (u32, Option<(u32, u32)>, Option<(i32, i32)>);
+
+/// The node id, logical size and position of the shared monitor's stream.
+fn first_stream(streams: &[ashpd::desktop::screencast::Stream]) -> anyhow::Result<StreamInfo> {
     let stream = streams.first().ok_or_else(|| anyhow!("no screen was shared"))?;
     let size = stream.size().and_then(|(w, h)| Some((u32::try_from(w).ok()?, u32::try_from(h).ok()?)));
-    Ok((stream.pipe_wire_node_id(), size))
+    Ok((stream.pipe_wire_node_id(), size, stream.position()))
 }
 
 /// Receives the screen from PipeWire until told to quit.

@@ -46,6 +46,8 @@ the tag `somedesk` (`adb logcat -s somedesk`).
 `scripts/wayland-env.sh` starts a headless GNOME Wayland session (with PipeWire and the portal);
 `scripts/gnome-input.sh` drives it like `xdotool`, and `scripts/wayland-grant.sh` answers the
 portal's permission dialog once. `scripts/test.sh` uses them for the Wayland end-to-end test.
+The input test for Hyprland, Sway and the like (`crates/platform/tests/wlr_input.rs`) starts its
+own headless Sway, if `sway` is installed, and checks what a window there receives.
 
 ## Brand
 
