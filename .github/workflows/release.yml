@@ -203,9 +203,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the packages: the image job leaves digests and Docker build records behind too.
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "{linux,appimage,android,windows,macos}"
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS

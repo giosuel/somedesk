@@ -61,6 +61,9 @@ jobs:
       # Pushed by digest only, without a tag: the merge job tags the multi-arch image.
       - id: build
         uses: docker/build-push-action@v7
+        env:
+          # The build record isn't needed, and it's uploaded in a form other jobs can't download.
+          DOCKER_BUILD_RECORD_UPLOAD: false
         with:
           context: .
           file: packaging/server/Dockerfile
