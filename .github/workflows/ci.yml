@@ -6,6 +6,8 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Only runs on main save their build caches; pull requests start from main's. (Each job's cache
+# is 0.6-1.5 GB and a repository gets 10 GB, so caches saved for every branch evicted main's.)
 env:
   CARGO_TERM_COLOR: always
   # Debug builds of the crypto and video crates are optimized anyway (see Cargo.toml).
@@ -23,6 +25,7 @@ jobs:
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: System libraries
         run: |
           sudo apt-get update
@@ -43,6 +46,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Android SDK packages and cargo-ndk
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -73,6 +77,7 @@ jobs:
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: System libraries and test tools
         run: |
           sudo apt-get update
@@ -94,6 +99,7 @@ jobs:
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Tests (without database or display)
         run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
       - run: cargo build --release -p somedesk-app
@@ -111,6 +117,7 @@ jobs:
         with:
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Tests (without database or display)
         run: cargo test -p somedesk-proto -p somedesk-crypto -p somedesk-codec -p somedesk-platform -p somedesk-client -p somedesk-app
       - run: packaging/macos/make-app.sh
@@ -119,23 +126,27 @@ jobs:
           name: somedesk-macos
           path: target/dist/SomeDesk-*-macos.zip
 
+  # Builds the release binaries exactly like the release workflow's linux job, which then starts
+  # from this job's cache (shared-key).
   packages:
     runs-on: ubuntu-24.04
-    needs: [lint, test-linux]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: linux-release
           # A failed run still saves what it compiled, so the next run doesn't start cold.
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: System libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config clang libfontconfig1-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev
       - run: cargo install cargo-deb --locked
-      - run: cargo deb -p somedesk-server && cargo deb -p somedesk-app
+      - run: cargo build --release --locked -p somedesk-server -p somedesk-app
+      - run: cargo deb --no-build -p somedesk-server && cargo deb --no-build -p somedesk-app
       - run: docker build -f packaging/server/Dockerfile -t somedesk-server .
       - uses: actions/upload-artifact@v4
         with:
