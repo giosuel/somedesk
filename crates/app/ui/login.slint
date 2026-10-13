@@ -23,6 +23,9 @@ export component LoginForm inherits VerticalLayout {
     /// The account has two-factor authentication: ask for the code from the app.
     in property <bool> need-code;
     in-out property <string> code;
+    /// The server only creates accounts with an invite code: ask for it.
+    in property <bool> need-invite;
+    in-out property <string> invite;
     /// Shown instead of the sign-in title when the password confirms an action
     /// (e.g. "Confirm with your password to turn on two-factor authentication.").
     in property <string> purpose;
@@ -120,6 +123,15 @@ export component LoginForm inherits VerticalLayout {
             text <=> root.password2;
             enabled: !root.busy;
         }
+    }
+    if root.create-mode && !root.recover-mode && root.need-invite: Field {
+        label: "Invite code";
+        placeholder: "From the server's admin";
+        font-family: Theme.mono;
+        font-size: 14px;
+        text <=> root.invite;
+        enabled: !root.busy;
+        accepted => { root.submit(); }
     }
     if root.need-code: Field {
         label: "Code from your authenticator app";

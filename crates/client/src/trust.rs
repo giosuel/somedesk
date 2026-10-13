@@ -123,12 +123,7 @@ impl TrustStore {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&self.file).expect("serializable"))?;
-        std::fs::rename(tmp, &self.path)
+        crate::credentials::write_private(&self.path, &serde_json::to_vec_pretty(&self.file).expect("serializable"))
     }
 
     /// How the device `device_id`, presenting `identity`, compares with what we remember. A
@@ -188,6 +183,11 @@ impl TrustStore {
     /// The key we have pinned for `device_id`.
     pub fn device(&self, device_id: u64) -> Option<&KnownDevice> {
         self.file.devices.get(&device_id)
+    }
+
+    /// The identity key remembered for the account `username`.
+    pub fn account(&self, username: &str) -> Option<&KnownAccount> {
+        self.file.accounts.get(username)
     }
 
     /// Forgets a device; the next connection with it is treated as the first.

@@ -6,6 +6,8 @@ export struct OrgItem {
     id: string,
     name: string,
     admin: bool,
+    /// Listed as a member, but not joined yet.
+    invited: bool,
 }
 
 export struct MemberItem {
@@ -84,6 +86,7 @@ export component OrgsView inherits HorizontalLayout {
     in property <string> selected;
     in property <string> org-name;
     in property <bool> org-admin;
+    in property <bool> org-invited;
     in property <[BookItem]> devices;
     in property <[MemberItem]> members;
     in property <[RuleItem]> rules;
@@ -100,6 +103,7 @@ export component OrgsView inherits HorizontalLayout {
     callback set-device-group(string, string);
     callback new-worker(string);
     callback revoke-worker(string);
+    callback answer-invite(bool);
     padding: 32px;
     padding-left: 36px;
     padding-right: 36px;
@@ -145,6 +149,7 @@ export component OrgsView inherits HorizontalLayout {
                         Text { text: org.name; color: Theme.text; font-size: 14px; vertical-alignment: center; overflow: elide; }
                         Rectangle { horizontal-stretch: 1; }
                         if org.admin: Text { text: "Admin"; color: Theme.subtle; font-size: 11px; vertical-alignment: center; }
+                        if org.invited: Text { text: "Invitation"; color: Theme.accent; font-size: 11px; vertical-alignment: center; }
                     }
                     org-ta := TouchArea { mouse-cursor: pointer; clicked => { root.select(org.id); } }
                 }
@@ -186,13 +191,33 @@ export component OrgsView inherits HorizontalLayout {
                 Text { text: root.org-name; color: Theme.text; font-size: 22px; font-weight: 600; vertical-alignment: center; }
                 if root.org-admin: Pill { y: (parent.height - self.height) / 2; text: "Admin"; }
             }
-            Section {
+            if root.org-invited: Section {
+                title: "You were added to this organisation";
+                detail: "Join it to see its devices" + (root.org-admin ? " and manage it" : "") + ". If you don't know it, decline: it then disappears from this list.";
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+                    PrimaryButton {
+                        height: 38px;
+                        text: "Join";
+                        busy: root.busy;
+                        clicked => { root.answer-invite(true); }
+                    }
+                    GhostButton {
+                        button-height: 38px;
+                        text: "Decline";
+                        enabled: !root.busy;
+                        clicked => { root.answer-invite(false); }
+                    }
+                }
+            }
+            if !root.org-invited: Section {
                 title: "Devices";
                 detail: root.org-admin ? "Enrolled by service workers. They only accept members the rules below allow; nobody can reach them by ID alone." : "The organisation's machines you may reach.";
                 if root.devices.length == 0: Text { text: "No devices enrolled yet."; color: Theme.subtle; font-size: 13px; }
                 BookList { items: root.devices; compact: true; connect(id) => { root.connect(id); } }
             }
-            if root.org-admin: Section {
+            if root.org-admin && !root.org-invited: Section {
                 title: "Members";
                 detail: "Each member signs in with their own account. Compare the fingerprint with them before relying on it.";
                 for m in root.members: Row {

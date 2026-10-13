@@ -5,6 +5,10 @@
 //! stores and delivers policies but cannot write one, and the enrolled devices (stubs) check the
 //! signature against the organisation key they were enrolled with: a server that wanted to let
 //! someone in would have to forge the organisation's signature.
+//!
+//! The key can be replaced (when an admin leaves, so their copy stops counting): the old key signs
+//! an [`OrgRotation`] to the new one, and devices follow the chain of rotations from the key they
+//! know.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,13 +25,16 @@ pub struct OrgPolicy {
     pub org_name: String,
     /// Increases with every change; stubs never go back to an older version.
     pub version: u64,
+    /// [`policy_hash`] of the version this one was made from (zero for the first), so an admin
+    /// can tell a policy that doesn't follow the one it last saw.
+    pub prev_hash: [u8; 32],
     /// Unix seconds.
     pub issued_at: i64,
     pub expires_at: i64,
     pub members: Vec<OrgMember>,
     /// Named groups of members.
     pub groups: Vec<OrgGroup>,
-    /// Named groups of enrolled devices ([`ALL_DEVICES`] needs no definition).
+    /// Named groups of enrolled devices ([`ALL_DEVICES`] needs no definition), by their keys.
     pub device_groups: Vec<DeviceGroup>,
     /// Who may connect to which devices, unattended.
     pub rules: Vec<AccessRule>,
@@ -52,8 +59,15 @@ pub struct OrgGroup {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceGroup {
     pub name: String,
-    /// Device IDs.
-    pub devices: Vec<u64>,
+    pub devices: Vec<GroupDevice>,
+}
+
+/// An enrolled device in a [`DeviceGroup`]. The device key decides (the server assigns IDs, so
+/// it could move one); the ID is only there to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupDevice {
+    pub device_pk: [u8; 32],
+    pub device_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +91,33 @@ pub struct ServiceWorker {
     pub revoked: bool,
 }
 
+/// The organisation key `from_pk` handing over to `to_pk`, signed by `from_pk`. Takes effect with
+/// the policy `version` (the first one `to_pk` signs).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrgRotation {
+    pub org_id: u64,
+    pub from_pk: [u8; 32],
+    pub to_pk: [u8; 32],
+    pub version: u64,
+    pub signature: Vec<u8>,
+}
+
+impl OrgRotation {
+    pub fn signed_bytes(&self) -> Vec<u8> {
+        postcard::to_stdvec(&(b"somedesk org key rotation v1", self.org_id, &self.from_pk, &self.to_pk, self.version))
+            .expect("serializing to a Vec cannot fail")
+    }
+}
+
+/// What an organisation's device needs to check the current policy: the policy and the
+/// rotations since the key it was enrolled with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicyBundle {
+    pub policy: SignedPolicy,
+    /// Oldest first.
+    pub rotations: Vec<OrgRotation>,
+}
+
 /// A policy with the organisation key's signature over [`SignedPolicy::policy`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignedPolicy {
@@ -88,8 +129,14 @@ pub struct SignedPolicy {
 impl SignedPolicy {
     /// What the signature covers: a domain tag and the policy bytes.
     pub fn signed_bytes(policy: &[u8]) -> Vec<u8> {
-        [b"somedesk org policy v1".as_slice(), policy].concat()
+        [b"somedesk org policy v2".as_slice(), policy].concat()
     }
+}
+
+/// Identifies a signed policy (for [`OrgPolicy::prev_hash`]).
+pub fn policy_hash(signed: &SignedPolicy) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::new().chain_update(&signed.policy).chain_update(&signed.signature).finalize().into()
 }
 
 /// Binds an enrolled device's key to an organisation. Signed by the service worker that
@@ -138,15 +185,18 @@ impl OrgPolicy {
         self.members.iter().find(|m| m.username == username)
     }
 
-    /// Whether the member `username` (with `identity_pk`) may connect to `device_id`.
-    pub fn allows(&self, username: &str, identity_pk: &[u8; 32], device_id: u64) -> bool {
+    /// Whether the member `username` (with `identity_pk`) may connect to the device `device_pk`.
+    pub fn allows(&self, username: &str, identity_pk: &[u8; 32], device_pk: &[u8; 32]) -> bool {
         if self.member(username).is_none_or(|m| &m.identity_pk != identity_pk) {
             return false;
         }
         self.rules.iter().any(|rule| {
             let in_group = self.groups.iter().any(|g| g.name == rule.group && g.members.iter().any(|m| m == username));
             let device_in = rule.device_group == ALL_DEVICES
-                || self.device_groups.iter().any(|g| g.name == rule.device_group && g.devices.contains(&device_id));
+                || self
+                    .device_groups
+                    .iter()
+                    .any(|g| g.name == rule.device_group && g.devices.iter().any(|d| &d.device_pk == device_pk));
             in_group && device_in
         })
     }
@@ -166,6 +216,7 @@ mod tests {
             org_id: 1,
             org_name: "ACME".into(),
             version: 1,
+            prev_hash: [0; 32],
             issued_at: 0,
             expires_at: 100,
             members: vec![
@@ -176,7 +227,10 @@ mod tests {
                 OrgGroup { name: "IT".into(), members: vec!["jane".into()] },
                 OrgGroup { name: "Support".into(), members: vec!["tom".into()] },
             ],
-            device_groups: vec![DeviceGroup { name: "Office".into(), devices: vec![111] }],
+            device_groups: vec![DeviceGroup {
+                name: "Office".into(),
+                devices: vec![GroupDevice { device_pk: [11; 32], device_id: 111 }],
+            }],
             rules: vec![
                 AccessRule { group: "IT".into(), device_group: ALL_DEVICES.into() },
                 AccessRule { group: "Support".into(), device_group: "Office".into() },
@@ -194,12 +248,12 @@ mod tests {
     #[test]
     fn rules_decide_who_reaches_which_devices() {
         let p = policy();
-        assert!(p.allows("jane", &[1; 32], 111));
-        assert!(p.allows("jane", &[1; 32], 222), "IT reaches all devices");
-        assert!(p.allows("tom", &[2; 32], 111));
-        assert!(!p.allows("tom", &[2; 32], 222), "Support only reaches the office");
-        assert!(!p.allows("tom", &[3; 32], 111), "another key under tom's name");
-        assert!(!p.allows("eve", &[4; 32], 111), "not a member");
+        assert!(p.allows("jane", &[1; 32], &[11; 32]));
+        assert!(p.allows("jane", &[1; 32], &[22; 32]), "IT reaches all devices");
+        assert!(p.allows("tom", &[2; 32], &[11; 32]));
+        assert!(!p.allows("tom", &[2; 32], &[22; 32]), "Support only reaches the office");
+        assert!(!p.allows("tom", &[3; 32], &[11; 32]), "another key under tom's name");
+        assert!(!p.allows("eve", &[4; 32], &[11; 32]), "not a member");
     }
 
     #[test]

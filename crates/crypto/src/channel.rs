@@ -21,7 +21,7 @@ use crate::keys::{verify_device_cert, DeviceKey};
 use serde::{de::DeserializeOwned, Serialize};
 use snow::{Builder, StatelessTransportState};
 use somedesk_proto::control::DeviceIdentity;
-use somedesk_proto::frame::{read_raw, write_raw, FrameError};
+use somedesk_proto::frame::{read_raw_limited, write_raw, FrameError};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -80,6 +80,9 @@ fn check_peer(
             return Err(ChannelError::BadPeer("account certificate is for another device".into()));
         }
     }
+    // Only that the certificate is the peer's own: anyone can make a worker key and sign one.
+    // What it says about an organisation counts only once checked against that organisation's
+    // key and policy, by whoever relies on it.
     if let Some(cert) = &identity.org {
         crate::org::verify_device_cert(cert).map_err(|e| ChannelError::BadPeer(e.to_string()))?;
         if cert.device_pk != identity.device_pk {
@@ -99,7 +102,7 @@ fn handshake_hash(hs: &snow::HandshakeState) -> [u8; 32] {
 }
 
 async fn read_hs<R: AsyncRead + Unpin>(r: &mut R) -> Result<Vec<u8>, ChannelError> {
-    read_raw(r).await?.ok_or(ChannelError::HandshakeEof)
+    read_raw_limited(r, NOISE_MAX).await?.ok_or(ChannelError::HandshakeEof)
 }
 
 /// Runs the handshake as the connecting side (viewer).
@@ -253,7 +256,7 @@ impl<R: AsyncRead + Unpin> SecureReceiver<R> {
     pub async fn recv_bytes(&mut self) -> Result<Option<Vec<u8>>, ChannelError> {
         let mut message = Vec::new();
         loop {
-            let Some(frame) = read_raw(&mut self.r).await? else {
+            let Some(frame) = read_raw_limited(&mut self.r, NOISE_MAX).await? else {
                 return if message.is_empty() { Ok(None) } else { Err(ChannelError::Malformed) };
             };
             let n = self.t.read_message(self.nonce, &frame, &mut self.plain)?;

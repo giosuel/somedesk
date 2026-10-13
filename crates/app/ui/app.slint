@@ -46,6 +46,8 @@ export component AppWindow inherits Window {
     in-out property <string> account-recovery-key;
     in property <bool> account-need-code;
     in-out property <string> account-code;
+    in property <bool> account-need-invite;
+    in-out property <string> account-invite;
     in property <string> account-purpose;
     in property <string> account-error;
     in property <bool> account-busy;
@@ -103,6 +105,7 @@ export component AppWindow inherits Window {
     in property <string> org-selected;
     in property <string> org-name;
     in property <bool> org-admin;
+    in property <bool> org-invited;
     in property <[BookItem]> org-devices;
     in property <[MemberItem]> org-members;
     in property <[RuleItem]> org-rules;
@@ -118,6 +121,7 @@ export component AppWindow inherits Window {
     callback org-set-device-group(string, string);
     callback org-new-worker(string);
     callback org-revoke-worker(string);
+    callback org-answer-invite(bool);
 
     // Unattended access to another computer: password and code
     in property <bool> pw-visible;
@@ -328,6 +332,7 @@ export component AppWindow inherits Window {
         org-selected: root.org-selected;
         org-name: root.org-name;
         org-admin: root.org-admin;
+        org-invited: root.org-invited;
         org-devices: root.org-devices;
         org-members: root.org-members;
         org-rules: root.org-rules;
@@ -343,6 +348,7 @@ export component AppWindow inherits Window {
         org-set-device-group(n, ids) => { root.org-set-device-group(n, ids); }
         org-new-worker(n) => { root.org-new-worker(n); }
         org-revoke-worker(k) => { root.org-revoke-worker(k); }
+        org-answer-invite(join) => { root.org-answer-invite(join); }
         view <=> root.home-view;
         tour-target: root.tour-target;
         start-tour => { root.tour-step = 0; root.tour-visible = true; }
@@ -522,6 +528,8 @@ export component AppWindow inherits Window {
         recovery-key <=> root.account-recovery-key;
         need-code: root.account-need-code;
         code <=> root.account-code;
+        need-invite: root.account-need-invite;
+        invite <=> root.account-invite;
         purpose: root.account-purpose;
         error: root.account-error;
         busy: root.account-busy;

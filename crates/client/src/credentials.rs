@@ -109,21 +109,27 @@ impl DeviceCredentials {
 
     /// Writes the file atomically with owner-only permissions.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
-        use std::io::Write;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp = path.with_extension("tmp");
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-        let mut f = opts.open(&tmp)?;
-        f.write_all(&serde_json::to_vec_pretty(self)?)?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, path)?;
+        write_private(path, &serde_json::to_vec_pretty(self)?)?;
         Ok(())
     }
+}
+
+/// Writes `bytes` to `path` atomically (a temporary file renamed over it), readable by the owner
+/// only.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    let mut f = opts.open(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]

@@ -101,8 +101,9 @@ pub enum Instance {
 }
 
 pub struct InstanceListener {
+    /// None when no socket could be had: then every start runs on its own.
     #[cfg(unix)]
-    listener: std::os::unix::net::UnixListener,
+    listener: Option<std::os::unix::net::UnixListener>,
     #[cfg(not(unix))]
     listener: std::net::TcpListener,
 }
@@ -113,7 +114,7 @@ pub fn claim(dir: &Path) -> Instance {
     {
         use std::io::Write;
         use std::os::unix::net::{UnixListener, UnixStream};
-        let path = dir.join("instance.sock");
+        let path = socket_path(dir);
         if let Ok(mut other) = UnixStream::connect(&path) {
             let _ = other.write_all(b"show\n");
             return Instance::Other;
@@ -121,16 +122,10 @@ pub fn claim(dir: &Path) -> Instance {
         // Nobody answered: a stale socket from a crash, or none.
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::create_dir_all(dir);
-        match UnixListener::bind(&path) {
-            Ok(listener) => Instance::First(InstanceListener { listener }),
-            Err(e) => {
-                tracing::warn!("cannot listen for other starts: {e}");
-                Instance::First(InstanceListener {
-                    listener: UnixListener::bind(dir.join(format!("instance-{}.sock", std::process::id())))
-                        .expect("a fresh socket"),
-                })
-            }
-        }
+        let listener = UnixListener::bind(&path)
+            .inspect_err(|e| tracing::warn!("cannot listen for other starts at {}: {e}", path.display()))
+            .ok();
+        Instance::First(InstanceListener { listener })
     }
     // No Unix sockets: a port on localhost, written to a file in the directory.
     #[cfg(not(unix))]
@@ -154,15 +149,40 @@ pub fn claim(dir: &Path) -> Instance {
     }
 }
 
+/// The socket in `dir`, or, where that path would be too long for a socket (deep home
+/// directories), one named after `dir` in the user's runtime directory.
+#[cfg(unix)]
+fn socket_path(dir: &Path) -> std::path::PathBuf {
+    // sockaddr_un holds 108 bytes on Linux and 104 on macOS, with the terminating zero.
+    const MAX: usize = 100;
+    let path = dir.join("instance.sock");
+    if path.as_os_str().len() < MAX {
+        return path;
+    }
+    // FNV-1a: the same name from every build, so a new version finds the running one.
+    let hash = dir
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3));
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    runtime.join(format!("somedesk-{hash:016x}.sock"))
+}
+
 impl InstanceListener {
     /// Calls `show` (on a background thread) whenever another start asks this instance to show
     /// its window.
     pub fn on_show(self, show: impl Fn() + Send + 'static) {
         #[cfg(unix)]
+        let Some(listener) = self.listener
+        else {
+            return;
+        };
+        #[cfg(unix)]
         std::thread::Builder::new()
             .name("somedesk-instance".into())
             .spawn(move || {
-                for stream in self.listener.incoming().flatten() {
+                for stream in listener.incoming().flatten() {
                     drop(stream);
                     show();
                 }

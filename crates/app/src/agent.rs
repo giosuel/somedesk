@@ -3,7 +3,8 @@
 //! It has no window of its own except the banner shown while someone controls it. It never
 //! starts a session, can't be reached by ID or password, and lets in only members its
 //! organisation's signed policy allows. It checks that policy itself, against the organisation key
-//! from its enrollment key, so the server can't add anyone.
+//! from its enrollment key (or one that key handed over to), so the server can't add anyone. The
+//! server can only keep someone out: a device taken off a member's account doesn't get in.
 
 use crate::AgentBanner;
 use clap::{Parser, Subcommand};
@@ -94,7 +95,7 @@ pub fn main() -> anyhow::Result<()> {
             let (creds, policy) = creds;
             creds.save(&creds_path)?;
             if let Some(policy) = policy {
-                PolicyStore::load(&dir.join("policy.json"), key.org_pk).update(policy)?;
+                PolicyStore::load(&dir.join("policy.json"), key.org_id, key.org_pk).update(policy)?;
             }
             println!("Enrolled into {} as {} (ID {}).", key.org_name, name, format_device_id(creds.device_id));
             println!("Start it with `somedesk-agent run`, or `somedesk-agent install-service` to start it at login.");
@@ -103,7 +104,7 @@ pub fn main() -> anyhow::Result<()> {
         Command::Status => {
             let creds = load(&creds_path)?;
             let org = creds.org.as_ref().expect("checked by load");
-            let store = PolicyStore::load(&dir.join("policy.json"), org.org_pk);
+            let store = PolicyStore::load(&dir.join("policy.json"), org.org_id, org.org_pk);
             println!("{} · ID {} · {}", creds.device_name, format_device_id(creds.device_id), org.org_name);
             match store.current() {
                 Some(p) => println!("Policy version {}, {} members", p.version, p.members.len()),
@@ -136,8 +137,8 @@ struct Agent {
 
 fn run(dir: PathBuf, creds_path: PathBuf) -> anyhow::Result<()> {
     let creds = load(&creds_path)?;
-    let org_pk = creds.org.as_ref().expect("checked by load").org_pk;
-    let policy = PolicyStore::load(&dir.join("policy.json"), org_pk);
+    let org = creds.org.as_ref().expect("checked by load");
+    let policy = PolicyStore::load(&dir.join("policy.json"), org.org_id, org.org_pk);
     let rt = tokio::runtime::Runtime::new()?;
     // The banner needs the UI event loop on this thread; the network runs on the runtime.
     let banner = AgentBanner::new()?;
@@ -232,10 +233,13 @@ impl Agent {
             Ok(ch) => ch,
             Err(e) => return tracing::warn!("incoming session handshake failed: {e}"),
         };
-        let peer = ch.peer.clone();
+        // The peer's account as the server has it now: a device taken off a member's account
+        // (stolen, say) is no longer that member's.
+        let peer = access::verified_identity(&ch.peer, &from.identity);
         let org_name = creds.org.as_ref().map(|o| o.org_name.clone()).unwrap_or_default();
+        let device_pk = creds.device_key().public();
         let allowed = match access::read_request(&mut ch).await {
-            Ok(Asked::Access) => self.policy.lock().unwrap().allows(&peer, creds.device_id),
+            Ok(Asked::Access) => self.policy.lock().unwrap().allows(&peer, &device_pk),
             Ok(Asked::Password(_)) | Err(_) => false,
         };
         if !allowed {

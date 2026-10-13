@@ -527,6 +527,8 @@ export component AccountDialog inherits Backdrop {
     in-out property <string> recovery-key;
     in property <bool> need-code;
     in-out property <string> code;
+    in property <bool> need-invite;
+    in-out property <string> invite;
     in property <string> purpose;
     callback submit();
     callback close();
@@ -547,6 +549,8 @@ export component AccountDialog inherits Backdrop {
             recovery-key <=> root.recovery-key;
             need-code: root.need-code;
             code <=> root.code;
+            need-invite: root.need-invite;
+            invite <=> root.invite;
             purpose: root.purpose;
             submit => { root.submit(); }
         }

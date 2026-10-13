@@ -61,6 +61,20 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.3.0" date="2026-10-12">
+      <description>
+        <p>Organisations a server can't take over, and servers that hold up against abuse.</p>
+        <ul>
+          <li>An organisation's key is shared by its admins, signed, and remembered by their accounts: a server can neither swap it nor hand out older rules</li>
+          <li>Removing an admin replaces the organisation's key; enrolled machines switch to the new one by themselves</li>
+          <li>Rules name machines by their keys, not by IDs the server assigns</li>
+          <li>A device taken off an account no longer reaches the organisation's machines</li>
+          <li>Being added to an organisation is an invitation you can join or decline</li>
+          <li>Servers with accounts only take new accounts with an invite code, and limit wrong passwords, connections and relayed traffic per client</li>
+        </ul>
+        <p>This version is not compatible with 0.2.0: update the app on every device, and the server. Organisations created with 0.2.0 can't be carried over; create them again and re-enroll their machines.</p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-10-12">
       <description>
         <p>New ways to connect, and optional accounts. Every feature stays free.</p>
