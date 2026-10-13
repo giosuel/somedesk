@@ -13,6 +13,7 @@ on:
       - Cargo.toml
       - Cargo.lock
       - packaging/server/**
+      - scripts/*version.sh
       - .github/workflows/server-image.yml
   workflow_call:
     inputs:
@@ -47,10 +48,18 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags, for the version of a main build
+      # A release's version, or one from the tags before this commit (0.4.1-dev.5+g…), written
+      # into the checkout the image is built from.
       - name: Image name and version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
         run: |
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/somedesk-server" >> "$GITHUB_ENV"
-          echo "VERSION=${{ inputs.version || format('main-{0}', github.sha) }}" >> "$GITHUB_ENV"
+          version="${RELEASE_VERSION:-$(scripts/version.sh)}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          scripts/set-version.sh "$version"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         if: env.PUSH == 'true'
@@ -77,7 +86,7 @@ jobs:
       - name: Smoke test
         run: |
           docker buildx build -f packaging/server/Dockerfile --platform ${{ matrix.platform }} --load -t smoke .
-          docker run --rm smoke --version
+          docker run --rm smoke --version | tee /dev/stderr | grep -qF " $VERSION"
       - name: Save the digest
         if: env.PUSH == 'true'
         run: |

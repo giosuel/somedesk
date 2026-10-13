@@ -1,7 +1,11 @@
 name: Release
 
-# Pushing a tag like v0.2.0 builds every package and publishes them as a GitHub release, and the
-# server image to ghcr.io. The tag must match the workspace version in Cargo.toml.
+# Pushing a tag like v0.4.0 builds every package and publishes them as a GitHub release, and the
+# server image to ghcr.io. The tag is the version: Cargo.toml keeps the placeholder 0.0.0-dev, and
+# every job writes the tag's version into its checkout first (scripts/set-version.sh). Release
+# notes come from the tag message, so a release is:
+#   git fetch origin && git tag -a v0.4.0 origin/main && git push origin v0.4.0
+# (the editor opens for the notes: a first paragraph, then "- " lines for a list).
 # Running it by hand (Actions › Release › Run workflow) is a dry run: everything is built and
 # uploaded as workflow artifacts, but no image is pushed and no release is created.
 on:
@@ -25,22 +29,38 @@ jobs:
   version:
     runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.check.outputs.version }}
+      version: ${{ steps.version.outputs.version }}
+      notes: ${{ steps.version.outputs.notes }}
     steps:
       - uses: actions/checkout@v4
-      - id: check
-        name: Version (a tag must match Cargo.toml)
+        with:
+          fetch-depth: 0 # the tags, for a dry run's version
+      # A tag's version is the tag; a dry run's comes from the tags before it (0.4.1-dev.5+g…).
+      - id: version
+        name: Version and release notes
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match the workspace version $version"
-            exit 1
-          fi
-          if ! grep -q "<release version=\"$version\"" packaging/linux/ch.giosuel.SomeDesk.metainfo.xml; then
-            echo "::error::packaging/linux/ch.giosuel.SomeDesk.metainfo.xml has no <release> entry for $version"
-            [ "$GITHUB_REF_TYPE" = tag ] && exit 1
+          notes=""
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::$GITHUB_REF_NAME is not a version tag like v1.2.3 or v1.2.3-rc.1"
+              exit 1
+            fi
+            # The checkout may have turned an annotated tag into a lightweight one.
+            git fetch --force origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+            if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = tag ]; then
+              notes=$(git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$GITHUB_REF_NAME")
+            fi
+            if [ -z "$notes" ] && [[ "$version" != *-* ]] \
+              && ! grep -q "<release version=\"$version\"" packaging/linux/ch.giosuel.SomeDesk.metainfo.xml; then
+              echo "::warning::$GITHUB_REF_NAME has no message: the release has no notes of its own (tag with git tag -a)"
+            fi
+          else
+            version=$(scripts/version.sh)
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          { echo "notes<<END_OF_NOTES"; printf '%s\n' "$notes"; echo "END_OF_NOTES"; } >> "$GITHUB_OUTPUT"
+          echo "Version $version"
 
   linux:
     needs: version
@@ -52,6 +72,12 @@ jobs:
         with:
           shared-key: linux-release
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Set the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ needs.version.outputs.notes }}
+        run: scripts/set-version.sh "$VERSION"
       - name: System libraries
         run: |
           sudo apt-get update
@@ -99,6 +125,12 @@ jobs:
         with:
           shared-key: appimage
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Set the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ needs.version.outputs.notes }}
+        run: scripts/set-version.sh "$VERSION"
       - run: packaging/linux/build-appimage.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -117,6 +149,12 @@ jobs:
         with:
           shared-key: android-release
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Set the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ needs.version.outputs.notes }}
+        run: scripts/set-version.sh "$VERSION"
       - name: Android SDK packages and cargo-ndk
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
@@ -157,6 +195,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
+      - name: Set the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ needs.version.outputs.notes }}
+        run: scripts/set-version.sh "$VERSION"
       - run: cargo build --release --locked -p somedesk-app
       - name: Zip
         shell: pwsh
@@ -179,6 +223,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: false
+      - name: Set the version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          RELEASE_NOTES: ${{ needs.version.outputs.notes }}
+        run: scripts/set-version.sh "$VERSION"
       - run: packaging/macos/make-app.sh
       - uses: actions/upload-artifact@v4
         with:
@@ -218,11 +268,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
+          NOTES: ${{ needs.version.outputs.notes }}
+        # The tag message, then GitHub's list of merged pull requests.
         run: |
           prerelease=""
           [[ "$VERSION" == *-* ]] && prerelease="--prerelease"
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --title "SomeDesk $VERSION" --generate-notes $prerelease
+            --title "SomeDesk $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes $prerelease
 
   aur:
     name: AUR (${{ matrix.pkg }})

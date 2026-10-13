@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 /// SomeDesk server: accounts, presence and end-to-end-encrypted relay.
 #[derive(Parser)]
-#[command(version, args_conflicts_with_subcommands = true)]
+#[command(version = env!("SOMEDESK_VERSION"), args_conflicts_with_subcommands = true)]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,

@@ -19,6 +19,11 @@ sha256sums=('SKIP')
 
 prepare() {
   cd "$pkgname-$pkgver"
+  # The sources say 0.0.0-dev: write the version in, as the release workflow does (releases
+  # before 0.4.0 have it in Cargo.toml already).
+  if [ -x scripts/set-version.sh ]; then
+    scripts/set-version.sh "$pkgver"
+  fi
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
