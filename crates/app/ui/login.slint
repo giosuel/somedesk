@@ -26,6 +26,8 @@ export component LoginForm inherits VerticalLayout {
     /// The server only creates accounts with an invite code: ask for it.
     in property <bool> need-invite;
     in-out property <string> invite;
+    /// The server only lets in devices of its accounts, so an account isn't optional here.
+    in property <bool> account-required;
     /// Shown instead of the sign-in title when the password confirms an action
     /// (e.g. "Confirm with your password to turn on two-factor authentication.").
     in property <string> purpose;
@@ -56,7 +58,9 @@ export component LoginForm inherits VerticalLayout {
         }
         if !root.recover-mode && root.purpose == "": Text {
             text: root.create-mode
-                ? "Optional. It syncs your address book and lets your own devices reach each other."
+                ? (root.account-required
+                    ? "This server only lets in devices of its accounts. It may need an invite code from its admin; you'll be asked for one then."
+                    : "Optional. It syncs your address book and lets your own devices reach each other. Some servers need an invite code from their admin; you'll be asked for one then.")
                 : "Your devices and address book follow you to every computer you sign in on.";
             color: Theme.muted;
             font-size: 14px;

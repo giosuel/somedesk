@@ -21,6 +21,13 @@ pub type Channel = Handshaked<quinn::RecvStream, quinn::SendStream>;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the viewer tries direct paths before using the relay.
 pub const DIRECT_WINDOW: Duration = Duration::from_millis(2500);
+/// How long the handshake may take on a direct path that connected: a path that stalls falls
+/// back to the relay well before the host gives up.
+const DIRECT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long the host waits for the handshake on any path: as long as the viewer may spend on
+/// direct paths, and then a whole handshake over the relay.
+const HOST_HANDSHAKE_TIMEOUT: Duration =
+    HANDSHAKE_TIMEOUT.saturating_add(DIRECT_WINDOW).saturating_add(DIRECT_HANDSHAKE_TIMEOUT);
 
 /// Which path a session's traffic takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +69,7 @@ pub async fn connect_routed(
     if !candidates.is_empty() && conn.direct().allowed() {
         if let Some((send, recv)) = find_direct_path(conn, session_id, &candidates).await {
             let fut = channel::initiate(recv, send, &prologue, &key, &own, Some(&host.identity.device_pk));
-            match tokio::time::timeout(HANDSHAKE_TIMEOUT, fut).await {
+            match tokio::time::timeout(DIRECT_HANDSHAKE_TIMEOUT, fut).await {
                 Ok(Ok(ch)) => {
                     tracing::info!(device_id, "direct connection established");
                     return Ok((ch, host, Route::Direct));
@@ -147,7 +154,7 @@ pub async fn accept_routed(
     let mut handshakes = FuturesUnordered::new();
     handshakes.push(respond(conn.open_relay(session_id).await?, Route::Relay));
 
-    let deadline = tokio::time::sleep(HANDSHAKE_TIMEOUT);
+    let deadline = tokio::time::sleep(HOST_HANDSHAKE_TIMEOUT);
     tokio::pin!(deadline);
     loop {
         tokio::select! {

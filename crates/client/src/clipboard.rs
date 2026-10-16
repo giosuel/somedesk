@@ -20,13 +20,10 @@ pub struct ClipboardSync {
 }
 
 impl ClipboardSync {
-    /// Starts mirroring `clipboard`. Local changes are sent through `outgoing`. With
+    /// Starts mirroring `clipboard`. Local changes are sent through `outgoing` (waiting while it
+    /// is full; the session must close it before joining the thread). With
     /// `send_initial`, whatever the clipboard already holds is sent right away too.
-    pub fn start(
-        mut clipboard: Box<dyn Clipboard>,
-        outgoing: mpsc::UnboundedSender<SessionMsg>,
-        send_initial: bool,
-    ) -> Self {
+    pub fn start(mut clipboard: Box<dyn Clipboard>, outgoing: mpsc::Sender<SessionMsg>, send_initial: bool) -> Self {
         let (incoming, rx) = std::sync::mpsc::channel::<String>();
         let thread = std::thread::Builder::new()
             .name("somedesk-clipboard".into())
@@ -34,7 +31,7 @@ impl ClipboardSync {
                 let mut last = read(&mut *clipboard);
                 if send_initial {
                     if let Some(text) = last.clone() {
-                        if outgoing.send(SessionMsg::Clipboard { text }).is_err() {
+                        if outgoing.blocking_send(SessionMsg::Clipboard { text }).is_err() {
                             return;
                         }
                     }
@@ -53,7 +50,7 @@ impl ClipboardSync {
                         Err(RecvTimeoutError::Timeout) => match read(&mut *clipboard) {
                             Some(text) if last.as_ref() != Some(&text) => {
                                 last = Some(text.clone());
-                                if outgoing.send(SessionMsg::Clipboard { text }).is_err() {
+                                if outgoing.blocking_send(SessionMsg::Clipboard { text }).is_err() {
                                     return;
                                 }
                             }

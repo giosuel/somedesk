@@ -13,7 +13,7 @@ STATE="$WL_DIR/state"
 mkdir -p "$STATE"
 rm -f "$STATE/portal-restore-token"
 cargo build -q -p somedesk-platform --example screen_probe
-target/debug/examples/screen_probe "$WL_DIR/probe.ppm" "$STATE" >"$WL_DIR/grant.log" 2>&1 &
+"${CARGO_TARGET_DIR:-target}/debug/examples/screen_probe" "$WL_DIR/probe.ppm" "$STATE" >"$WL_DIR/grant.log" 2>&1 &
 probe=$!
 
 # Wait for the portal's dialog to be placed on screen and find where it is.

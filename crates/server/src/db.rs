@@ -294,7 +294,10 @@ pub async fn get_vault(pool: &PgPool, user_id: i64) -> anyhow::Result<(u64, Vec<
 /// Replaces the vault if it is still at `base_version`; returns the new version, or `None` if
 /// another device changed it in the meantime.
 pub async fn put_vault(pool: &PgPool, user_id: i64, base_version: u64, blob: &[u8]) -> anyhow::Result<Option<u64>> {
-    let new = base_version as i64 + 1;
+    // Versions count up from 1; one that doesn't fit (or has no successor) can't be the vault's.
+    let Some(new) = i64::try_from(base_version).ok().and_then(|v| v.checked_add(1)) else {
+        return Ok(None);
+    };
     let rows = if base_version == 0 {
         sqlx::query("INSERT INTO vaults (user_id, version, blob) VALUES ($1, 1, $2) ON CONFLICT (user_id) DO NOTHING")
             .bind(user_id)
@@ -595,17 +598,21 @@ pub async fn get_org_key(pool: &PgPool, org_id: u64, user_id: i64) -> anyhow::Re
         .await?)
 }
 
-pub async fn put_org_key(pool: &PgPool, org_id: u64, user_id: i64, sealed_key: &[u8]) -> anyhow::Result<()> {
-    sqlx::query(
+/// Stores the organisation key sealed for an account that has none yet; returns `false` if it
+/// has one. A copy is never replaced: otherwise one admin could lock another out of the key with
+/// garbage. A new key (a rotation) replaces them all at once.
+pub async fn put_org_key(pool: &PgPool, org_id: u64, user_id: i64, sealed_key: &[u8]) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
         "INSERT INTO org_keys (org_id, user_id, sealed_key) VALUES ($1, $2, $3)
-         ON CONFLICT (org_id, user_id) DO UPDATE SET sealed_key = $3",
+         ON CONFLICT (org_id, user_id) DO NOTHING",
     )
     .bind(org_id as i64)
     .bind(user_id)
     .bind(sealed_key)
     .execute(pool)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected()
+        == 1)
 }
 
 pub async fn touch_device(pool: &PgPool, device_id: u64) -> anyhow::Result<()> {

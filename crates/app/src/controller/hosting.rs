@@ -10,6 +10,31 @@ use somedesk_client::session;
 use somedesk_client::trust::PeerStatus;
 use somedesk_proto::control::{DeviceInfo, SessionId};
 
+/// Accept works only this long after the prompt appeared, so a click or key press meant for
+/// something else doesn't let anyone in.
+pub(super) const ACCEPT_DELAY: Duration = Duration::from_secs(1);
+/// How long a caller who was declined (or not answered) is turned away without asking again.
+const DECLINE_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// The incoming-connection prompt on screen.
+pub(super) struct Prompt {
+    id: u64,
+    shown: Instant,
+    answer: oneshot::Sender<bool>,
+}
+
+/// Whether an answer from the UI counts: it is for the prompt on screen (`pending`, shown at
+/// `shown`), and an Accept comes only after [`ACCEPT_DELAY`].
+fn answer_counts(pending: u64, shown: Instant, id: u64, accept: bool, now: Instant) -> bool {
+    pending == id && (!accept || now.saturating_duration_since(shown) >= ACCEPT_DELAY)
+}
+
+/// Whether `device_id` was declined within [`DECLINE_COOLDOWN`] of `now` (forgetting older ones).
+fn recently_declined(declined: &mut std::collections::HashMap<u64, Instant>, device_id: u64, now: Instant) -> bool {
+    declined.retain(|_, at| now.saturating_duration_since(*at) < DECLINE_COOLDOWN);
+    declined.contains_key(&device_id)
+}
+
 /// How a viewer got in.
 enum Admitted {
     Accepted,
@@ -20,9 +45,12 @@ enum Admitted {
 impl Controller {
     pub(super) fn install_hosting_callbacks(&self, ui: &AppWindow) {
         let c = self.clone();
-        ui.on_incoming_answer(move |ok| {
-            if let Some(tx) = c.0.state.lock().unwrap().incoming_answer.take() {
-                let _ = tx.send(ok);
+        ui.on_incoming_answer(move |id, ok| {
+            let mut st = c.0.state.lock().unwrap();
+            let counts =
+                st.incoming.as_ref().is_some_and(|p| answer_counts(p.id, p.shown, id as u64, ok, Instant::now()));
+            if let Some(p) = st.incoming.take_if(|_| counts) {
+                let _ = p.answer.send(ok);
             }
         });
         let c = self.clone();
@@ -46,15 +74,25 @@ impl Controller {
         });
         let c = self.clone();
         ui.on_unattended_disable(move || {
-            let result = c.0.state.lock().unwrap().unattended.as_mut().map(|u| u.disable());
-            match result {
-                Some(Ok(())) => {
-                    c.ui(|ui| ui.set_unattended(false));
-                    c.toast("Unattended access is off", false);
-                }
-                Some(Err(e)) => c.toast(format!("Could not turn it off: {e}"), true),
-                None => {}
+            // An exchange with a viewer may hold the setup: it won't let them in, and this
+            // happens as soon as it ends.
+            c.0.unattended_off.store(true, Ordering::SeqCst);
+            if c.0.unattended.try_lock().is_err() {
+                c.toast("Someone is trying unattended access right now. It turns off once they are done.", false);
             }
+            let c = c.clone();
+            c.0.rt.clone().spawn(async move {
+                let result = c.0.unattended.lock().await.as_mut().map(|u| u.disable());
+                c.0.unattended_off.store(false, Ordering::SeqCst);
+                match result {
+                    Some(Err(e)) => c.toast(format!("Could not turn it off: {e}"), true),
+                    // Off, or never on (its setup couldn't be read).
+                    Some(Ok(())) | None => {
+                        c.ui(|ui| ui.set_unattended(false));
+                        c.toast("Unattended access is off", false);
+                    }
+                }
+            });
         });
     }
 
@@ -98,26 +136,41 @@ impl Controller {
             return;
         }
         let code = ui.get_twofa_code().trim().to_string();
-        let result = {
-            let mut st = self.0.state.lock().unwrap();
-            let st = &mut *st;
-            match (&st.twofa, st.unattended.as_mut()) {
-                (Some(TwoFactorSetup::Unattended(Some(pending))), Some(store)) => store.confirm(pending, &code),
-                _ => return,
-            }
+        let pending = match &mut self.0.state.lock().unwrap().twofa {
+            Some(TwoFactorSetup::Unattended(p @ Some(_))) => p.take().expect("matched"),
+            _ => return,
         };
-        match result {
-            Ok(()) => {
-                self.0.state.lock().unwrap().twofa = None;
-                ui.set_twofa_visible(false);
-                ui.set_twofa_qr(Image::default());
-                ui.set_twofa_code("".into());
-                ui.set_unattended(true);
-                self.toast("Unattended access is on", false);
+        ui.set_twofa_busy(true);
+        let this = self.clone();
+        // Waits for an exchange with a viewer that may be holding the setup.
+        self.0.rt.spawn(async move {
+            let result = match this.0.unattended.lock().await.as_mut() {
+                Some(store) => store.confirm(&pending, &code),
+                None => Err(somedesk_client::ClientError::Other("unattended access isn't available here".into())),
+            };
+            this.ui(|ui| ui.set_twofa_busy(false));
+            match result {
+                Ok(()) => {
+                    this.0.state.lock().unwrap().twofa = None;
+                    this.ui(|ui| {
+                        ui.set_twofa_visible(false);
+                        ui.set_twofa_qr(Image::default());
+                        ui.set_twofa_code("".into());
+                        ui.set_unattended(true);
+                    });
+                    this.toast("Unattended access is on", false);
+                }
+                // The setup stays (unless the dialog was closed meanwhile), so another code can
+                // be tried.
+                Err(e) => {
+                    if let Some(TwoFactorSetup::Unattended(p @ None)) = &mut this.0.state.lock().unwrap().twofa {
+                        *p = Some(pending);
+                    }
+                    let msg = e.to_string();
+                    this.ui(move |ui| ui.set_twofa_error(msg.into()));
+                }
             }
-            // The setup stays, so another code can be tried.
-            Err(e) => ui.set_twofa_error(e.to_string().into()),
-        }
+        });
     }
 
     pub(super) async fn handle_incoming(
@@ -151,15 +204,19 @@ impl Controller {
         }
         let admitted = match access::read_request(&mut ch).await {
             Ok(Asked::Password(request)) => {
-                // Take the store out for the exchange (no lock across the awaits).
-                let store = self.0.state.lock().unwrap().unattended.take();
-                let Some(mut store) = store else {
+                let mut store = self.0.unattended.lock().await;
+                let Some(unattended) = store.as_mut() else {
+                    drop(store);
                     host::reject(ch, "This computer doesn't allow unattended access.").await;
                     self.0.busy.store(false, Ordering::SeqCst);
                     return;
                 };
-                let verdict = store.check(&mut ch, &creds.device_key().public(), &request).await;
-                self.0.state.lock().unwrap().unattended = Some(store);
+                let mut verdict = unattended.check(&mut ch, &creds.device_key().public(), &request).await;
+                // Turned off during the exchange (read before the turning off can go ahead).
+                if self.0.unattended_off.load(Ordering::SeqCst) && matches!(verdict, Ok(Verdict::Accepted)) {
+                    verdict = Ok(Verdict::Rejected("This computer doesn't allow unattended access.".into()));
+                }
+                drop(store);
                 match verdict {
                     Ok(Verdict::Accepted) => Some(Admitted::Password),
                     Ok(Verdict::Rejected(reason)) => {
@@ -196,17 +253,29 @@ impl Controller {
                         Some(PeerStatus::Changed(c)) => fingerprint(c.previous_key()),
                         _ => String::new(),
                     };
+                    let declined_lately =
+                        recently_declined(&mut self.0.state.lock().unwrap().declined, from.device_id, Instant::now());
+                    if declined_lately {
+                        tracing::info!(device = from.device_id, "declined without asking: declined a moment ago");
+                        host::reject(ch, "The connection was declined.").await;
+                        self.0.busy.store(false, Ordering::SeqCst);
+                        return;
+                    }
                     // If the caller gives up while we are asking, take the question down.
                     let accepted = tokio::select! {
                         answer = self.prompt(from.device_id, &peer, level, previous) => answer,
                         _ = ch.receiver.recv::<SessionMsg>() => {
-                            self.0.state.lock().unwrap().incoming_answer = None;
+                            self.0.state.lock().unwrap().incoming = None;
                             self.ui(|ui| ui.set_incoming_visible(false));
                             self.toast(format!("{label} cancelled the connection"), false);
                             self.0.busy.store(false, Ordering::SeqCst);
                             return;
                         }
                     };
+                    if !accepted {
+                        // Declined or not answered: don't let them ask again right away.
+                        self.0.state.lock().unwrap().declined.insert(from.device_id, Instant::now());
+                    }
                     accepted.then_some(Admitted::Accepted)
                 }
             }
@@ -286,8 +355,10 @@ impl Controller {
         }
         let clipboard = self.clipboard();
         let settings = HostSettings { view_only: !screen.can_control, ..Default::default() };
-        // The viewer controls this computer anyway, so files from it are saved without asking.
-        let files = self.start_transfers(AcceptPolicy::Always, &label);
+        // A viewer in control could put files here anyway, so its files are saved without
+        // asking; a view-only one's need the user's OK.
+        let policy = if screen.can_control { AcceptPolicy::Always } else { AcceptPolicy::Ask };
+        let files = self.start_transfers(policy, &label);
         let extras = somedesk_client::SessionExtras { clipboard, files: Some(files) };
         let result = host::serve(ch, screen.capturer, screen.injector, extras, settings, stop_rx).await;
         self.end_transfers();
@@ -309,18 +380,32 @@ impl Controller {
         previous_fingerprint: String,
     ) -> bool {
         let (tx, rx) = oneshot::channel();
-        self.0.state.lock().unwrap().incoming_answer = Some(tx);
+        let id = {
+            let mut st = self.0.state.lock().unwrap();
+            st.incoming_seq += 1;
+            let id = st.incoming_seq;
+            st.incoming = Some(Prompt { id, shown: Instant::now(), answer: tx });
+            id
+        };
         let user = peer.username().map(str::to_owned).unwrap_or_else(|| peer.name.clone());
         let device = match peer.username() {
             Some(_) => format!("{} · ID {}", peer.name, format_device_id(device_id)),
             None => format!("ID {} · not signed in to an account", format_device_id(device_id)),
         };
         let fp = fingerprint(&peer.device_pk);
-        let note = if somedesk_platform::will_ask_permission(Some(&self.0.dir)) {
-            "Your desktop will then ask what to share. Choose Share, and turn on \"Allow Remote Interaction\" so \
-             they can use the mouse and keyboard. You will only be asked once."
-        } else {
-            ""
+        let asks = somedesk_platform::will_ask_permission(Some(&self.0.dir));
+        let note = match (asks, somedesk_platform::control_without_desktop_consent()) {
+            // Hyprland, Sway: the desktop asks about the screen only.
+            (true, true) => {
+                "Your desktop will then ask which screen to share. Accepting also lets them use the mouse and \
+                 keyboard: your desktop doesn't ask about that. You will only be asked once."
+            }
+            (false, true) => "Accepting lets them see your screen and use the mouse and keyboard.",
+            (true, false) => {
+                "Your desktop will then ask what to share. Choose Share, and turn on \"Allow Remote Interaction\" so \
+                 they can use the mouse and keyboard. You will only be asked once."
+            }
+            (false, false) => "",
         };
         self.ui(move |ui| {
             ui.set_incoming_note(note.into());
@@ -330,12 +415,51 @@ impl Controller {
             ui.set_incoming_fingerprint(fp.into());
             ui.set_incoming_trust(trust);
             ui.set_incoming_previous_fingerprint(previous_fingerprint.into());
+            ui.set_incoming_request(id as i32);
+            ui.set_incoming_ready(false);
             ui.set_incoming_visible(true);
             bring_to_front(ui);
         });
+        let this = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(ACCEPT_DELAY).await;
+            if this.0.state.lock().unwrap().incoming.as_ref().is_some_and(|p| p.id == id) {
+                this.ui(|ui| ui.set_incoming_ready(true));
+            }
+        });
         let answer = matches!(tokio::time::timeout(PROMPT_TIMEOUT, rx).await, Ok(Ok(true)));
-        self.0.state.lock().unwrap().incoming_answer = None;
+        self.0.state.lock().unwrap().incoming = None;
         self.ui(|ui| ui.set_incoming_visible(false));
         answer
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accept_counts_only_after_the_delay_and_for_its_prompt() {
+        let shown = Instant::now();
+        // Too early: a click meant for something else.
+        assert!(!answer_counts(3, shown, 3, true, shown + ACCEPT_DELAY / 2));
+        assert!(answer_counts(3, shown, 3, true, shown + ACCEPT_DELAY));
+        // Declining works at once.
+        assert!(answer_counts(3, shown, 3, false, shown));
+        // An answer given to an earlier prompt doesn't answer this one.
+        assert!(!answer_counts(4, shown, 3, true, shown + ACCEPT_DELAY * 2));
+        assert!(!answer_counts(4, shown, 3, false, shown + ACCEPT_DELAY * 2));
+    }
+
+    #[test]
+    fn declined_callers_are_turned_away_for_a_while() {
+        let mut declined = std::collections::HashMap::new();
+        let t = Instant::now();
+        assert!(!recently_declined(&mut declined, 7, t));
+        declined.insert(7, t);
+        assert!(recently_declined(&mut declined, 7, t + Duration::from_secs(5)));
+        assert!(!recently_declined(&mut declined, 8, t + Duration::from_secs(5)));
+        assert!(!recently_declined(&mut declined, 7, t + DECLINE_COOLDOWN));
+        assert!(declined.is_empty(), "old entries are forgotten");
     }
 }

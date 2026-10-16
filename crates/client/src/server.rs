@@ -21,6 +21,9 @@ use tokio::sync::{mpsc, oneshot};
 
 type Pending = Arc<Mutex<HashMap<u32, oneshot::Sender<Result<Response, ErrorInfo>>>>>;
 
+/// Server events waiting for the app; when it doesn't keep up, further ones are dropped.
+const EVENT_QUEUE: usize = 256;
+
 pub struct ServerConn {
     endpoint: quinn::Endpoint,
     conn: quinn::Connection,
@@ -71,7 +74,7 @@ fn unexpected() -> ClientError {
 impl ServerConn {
     /// Connects to `server` (`host` or `host:port`). If `pin` is `None` the certificate is
     /// trusted on first use; read it back with [`ServerConn::fingerprint`] and store it.
-    pub async fn connect(server: &str, pin: Option<[u8; 32]>) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Event>)> {
+    pub async fn connect(server: &str, pin: Option<[u8; 32]>) -> Result<(Arc<Self>, mpsc::Receiver<Event>)> {
         let addr = resolve(server).await?;
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let verifier = Arc::new(PinningVerifier::new(pin, provider.clone()));
@@ -110,7 +113,7 @@ impl ServerConn {
 
         let (send, mut recv) = conn.open_bi().await.map_err(transport_err)?;
         let pending: Pending = Arc::default();
-        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (events_tx, events_rx) = mpsc::channel(EVENT_QUEUE);
         let p = pending.clone();
         tokio::spawn(async move {
             loop {
@@ -121,7 +124,10 @@ impl ServerConn {
                         }
                     }
                     Ok(Some(ServerFrame::Event(ev))) => {
-                        let _ = events_tx.send(ev);
+                        // Never block here: responses to requests come on the same stream.
+                        if let Err(mpsc::error::TrySendError::Full(ev)) = events_tx.try_send(ev) {
+                            tracing::warn!("dropping a server event nobody reads: {ev:?}");
+                        }
                     }
                     Ok(None) | Err(_) => break,
                 }

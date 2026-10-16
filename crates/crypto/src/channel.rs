@@ -245,7 +245,9 @@ impl<R: AsyncRead + Unpin> SecureReceiver<R> {
         Self { r, t, nonce: 0, plain: vec![0u8; NOISE_MAX] }
     }
 
-    /// Receives the next message. `Ok(None)` means the peer closed the channel cleanly.
+    /// Receives the next message. `Ok(None)` means the stream ended between two messages. That
+    /// end is not authenticated (whoever carries the stream, such as the relay, can cut it there),
+    /// so a session that has to know it is complete waits for an explicit message such as `Bye`.
     pub async fn recv<T: DeserializeOwned>(&mut self) -> Result<Option<T>, ChannelError> {
         match self.recv_bytes().await? {
             Some(bytes) => postcard::from_bytes(&bytes).map(Some).map_err(|_| ChannelError::Malformed),

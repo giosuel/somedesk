@@ -27,7 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - id: check
         name: Version (a tag must match Cargo.toml)
         run: |
@@ -46,9 +46,11 @@ jobs:
     needs: version
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: linux-release
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -57,7 +59,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends pkg-config clang libfontconfig1-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-dev libpipewire-0.3-dev libspa-0.2-dev
-      - run: cargo install cargo-deb --locked
+      - run: cargo install cargo-deb@3.8.0 --locked
       - run: cargo build --release --locked -p somedesk-server -p somedesk-app
       - run: cargo deb --no-build -p somedesk-server && cargo deb --no-build -p somedesk-app
       - name: Binary archive
@@ -73,7 +75,7 @@ jobs:
           cp assets/brand/app-icon.svg "dist/$name/assets/brand/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           cp target/debian/*.deb dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux
           path: |
@@ -93,27 +95,33 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config \
             clang python3 file libfontconfig1-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev \
             libx11-dev libpipewire-0.3-dev libspa-0.2-dev
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: appimage
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: packaging/linux/build-appimage.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: appimage
           path: target/dist/*.AppImage
 
   android:
     needs: version
+    # The signing key is a secret of the `release` environment (only for v* tags); dry runs
+    # don't get it.
+    environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: aarch64-linux-android, x86_64-linux-android
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: android-release
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -125,25 +133,25 @@ jobs:
           cargo install cargo-ndk@4.1.2 --locked
       # Releases are signed with the app's own key, so phones accept them as updates. Add it as
       # the secrets ANDROID_KEYSTORE_BASE64 (base64 of the keystore file, key alias "somedesk")
-      # and ANDROID_KEYSTORE_PASSWORD. Dry runs without it use a throwaway debug key.
+      # and ANDROID_KEYSTORE_PASSWORD of the `release` environment. Dry runs use a throwaway key.
       - name: Signing key
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ github.ref_type == 'tag' && secrets.ANDROID_KEYSTORE_BASE64 || '' }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ]; then
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ -n "$KEYSTORE_BASE64" ]; then
             echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
             echo "SOMEDESK_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
           elif [ "$GITHUB_REF_TYPE" = tag ]; then
             echo "::error::the ANDROID_KEYSTORE_BASE64 secret is not set, so the APK cannot be signed for release"
             exit 1
           else
-            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set: this dry run signs the APK with a throwaway key"
+            echo "::notice::this dry run signs the APK with a throwaway key"
           fi
       - name: Build the APK
         env:
-          SOMEDESK_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SOMEDESK_KEYSTORE_PASSWORD: ${{ github.ref_type == 'tag' && secrets.ANDROID_KEYSTORE_PASSWORD || '' }}
         run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358" packaging/android/build-apk.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android
           path: target/dist/*.apk
@@ -152,9 +160,11 @@ jobs:
     needs: version
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: false
       - run: cargo build --release --locked -p somedesk-app
@@ -165,7 +175,7 @@ jobs:
           New-Item -ItemType Directory -Path "dist/$name" | Out-Null
           Copy-Item target/release/somedesk.exe, target/release/somedesk-agent.exe, README.md, LICENSE "dist/$name/"
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows
           path: dist/*.zip
@@ -174,13 +184,15 @@ jobs:
     needs: version
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: false
       - run: packaging/macos/make-app.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos
           path: target/dist/SomeDesk-*-macos.zip
@@ -207,7 +219,7 @@ jobs:
       contents: write
     steps:
       # Only the packages: the image job leaves digests and Docker build records behind too.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           pattern: "{linux,appimage,android,windows,macos}"
@@ -229,13 +241,15 @@ jobs:
     # Stable releases only, after the GitHub release (and its tarball) exists.
     needs: release
     if: ${{ !contains(github.ref_name, '-') }}
+    # AUR_SSH_PRIVATE_KEY is a secret of this environment.
+    environment: release
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         pkg: [somedesk, somedesk-bin]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Set pkgver
         run: |
           sed -i -e "s/^pkgver=.*/pkgver=${GITHUB_REF_NAME#v}/" -e "s/^pkgrel=.*/pkgrel=1/" \

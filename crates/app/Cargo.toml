@@ -36,6 +36,11 @@ qrcode = { version = "0.14", default-features = false }
 slint = { version = "1.18", features = ["unstable-winit-030"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
+# Windows: a named mutex and a token for the single-instance check.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
+rand.workspace = true
+
 # Android: Slint's native-activity backend instead of winit (see crates/android).
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.18", default-features = false, features = ["compat-1-2", "std", "backend-android-activity-06"] }

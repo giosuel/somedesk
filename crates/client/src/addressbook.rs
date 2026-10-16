@@ -12,6 +12,11 @@
 //! entry is kept as a tombstone for a while, so the deletion reaches the other devices instead of
 //! the entry coming back from them.
 //!
+//! Every upload carries a counter inside the encrypted contents, one higher than the highest this
+//! device has seen. The server can't forge one, so it can't hand back an older copy (bringing
+//! back deleted entries or old passwords) unnoticed: a device that sees a lower counter ignores
+//! that copy and uploads its own. Copies from before the counter count as 0.
+//!
 //! It also keeps the account's [`OrgPin`]s: the key and newest policy of each organisation the
 //! account administers, merged by the highest version.
 
@@ -84,6 +89,9 @@ struct Contents {
     entries: Vec<Entry>,
     #[serde(default)]
     orgs: Vec<OrgPin>,
+    /// Goes up with every upload (see the module docs).
+    #[serde(default)]
+    counter: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -95,6 +103,9 @@ struct File {
     /// The vault version this book was last merged with.
     #[serde(default)]
     synced_version: u64,
+    /// The highest vault counter seen, by account.
+    #[serde(default)]
+    vault_counters: BTreeMap<String, u64>,
 }
 
 pub struct AddressBook {
@@ -261,6 +272,7 @@ impl AddressBook {
         Contents {
             entries: self.file.entries.values().cloned().collect(),
             orgs: self.file.orgs.values().cloned().collect(),
+            counter: 0,
         }
     }
 
@@ -275,16 +287,17 @@ impl AddressBook {
                 let plain = key.open(&blob, username)?;
                 serde_json::from_slice(&plain).map_err(|_| ClientError::Protocol("unreadable vault"))?
             };
-            let changed = self.merge(remote) || version == 0;
-            if !changed {
+            let Some(next) = self.take_remote(remote, username) else {
                 self.file.synced_version = version;
                 self.save().map_err(|e| ClientError::Other(e.to_string()))?;
                 return Ok(());
-            }
-            let plain = zeroize::Zeroizing::new(serde_json::to_vec(&self.contents()).expect("serializable"));
+            };
+            let contents = Contents { counter: next, ..self.contents() };
+            let plain = zeroize::Zeroizing::new(serde_json::to_vec(&contents).expect("serializable"));
             match conn.put_vault(version, key.seal(&plain, username)).await {
                 Ok(new) => {
                     self.file.synced_version = new;
+                    self.file.vault_counters.insert(username.to_owned(), next);
                     self.save().map_err(|e| ClientError::Other(e.to_string()))?;
                     return Ok(());
                 }
@@ -293,6 +306,23 @@ impl AddressBook {
             }
         }
         Err(ClientError::Other("the address book keeps changing on another device; try again".into()))
+    }
+
+    /// Merges the vault's `remote` contents unless they are older than what this device saw for
+    /// `username`. Returns the counter to upload with, if the book has to go up.
+    fn take_remote(&mut self, remote: Contents, username: &str) -> Option<u64> {
+        let seen = self.file.vault_counters.get(username).copied().unwrap_or(0);
+        if remote.counter < seen {
+            tracing::warn!(
+                "the server sent an older copy of the address book ({} < {seen}); uploading ours",
+                remote.counter
+            );
+            return Some(seen + 1);
+        }
+        let counter = remote.counter;
+        self.file.vault_counters.insert(username.to_owned(), counter);
+        // A vault without a counter yet gets one.
+        (self.merge(remote) || counter == 0).then_some(counter + 1)
     }
 }
 
@@ -362,6 +392,41 @@ mod tests {
         assert_eq!(b.org_pin(9).unwrap().version, 5);
         assert!(!b.merge(Contents { orgs: vec![pin(7)], ..Default::default() }));
         assert_eq!(b.org_pin(9).unwrap().version, 7, "a newer one from another device");
+    }
+
+    #[test]
+    fn an_older_vault_copy_is_not_taken() {
+        let mut b = book();
+        let mut remote = Contents { entries: vec![entry(1, "desktop", 100)], ..Default::default() };
+        // A vault from before counters: taken, and it goes up again with one.
+        assert_eq!(b.take_remote(remote.clone(), "alice"), Some(1));
+        b.file.vault_counters.insert("alice".into(), 1);
+        remote.counter = 1;
+        assert_eq!(b.take_remote(remote.clone(), "alice"), None, "the same copy: nothing to do");
+        // The entry is deleted and the deletion uploaded as copy 2.
+        b.remove(1);
+        b.file.vault_counters.insert("alice".into(), 2);
+        // The server hands back copy 1 once the tombstone is gone: it doesn't count.
+        b.file.entries.clear();
+        assert_eq!(b.take_remote(remote.clone(), "alice"), Some(3), "ours goes up over it");
+        assert!(b.get(1).is_none(), "the deleted entry doesn't come back");
+        assert_eq!(b.take_remote(Contents { counter: 0, ..remote.clone() }, "alice"), Some(3));
+        // Newer copies are taken, and counters are per account.
+        remote.counter = 5;
+        assert_eq!(b.take_remote(remote.clone(), "alice"), None);
+        assert_eq!(b.file.vault_counters["alice"], 5);
+        assert_eq!(b.take_remote(Contents { counter: 2, ..remote }, "bob"), None);
+    }
+
+    #[test]
+    fn counters_are_kept_and_old_vaults_read() {
+        let old: Contents = serde_json::from_str(r#"{"entries":[],"orgs":[]}"#).unwrap();
+        assert_eq!(old.counter, 0);
+        let mut b = book();
+        b.file.vault_counters.insert("alice".into(), 7);
+        b.save().unwrap();
+        assert_eq!(AddressBook::load(&b.path).unwrap().file.vault_counters["alice"], 7);
+        std::fs::remove_file(&b.path).unwrap();
     }
 
     #[test]

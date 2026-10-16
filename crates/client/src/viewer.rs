@@ -5,6 +5,8 @@ use crate::session::Channel;
 use crate::{ClientError, Result, SessionExtras};
 use somedesk_codec::{H264Decoder, RgbFrame};
 use somedesk_proto::session::SessionMsg;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -32,6 +34,13 @@ pub type EventSink = Arc<dyn Fn(ViewerEvent) + Send + Sync>;
 
 /// How long to wait for the person at the host to accept.
 pub const ACCEPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Video messages that may wait for the decoder, in number and in bytes. A decoder that falls
+/// further behind skips ahead to the next keyframe.
+const VIDEO_QUEUE_FRAMES: usize = 8;
+const VIDEO_QUEUE_BYTES: usize = 64 * 1024 * 1024;
+/// Control messages (pongs, keyframe requests, clipboard) waiting to be sent.
+const CTRL_QUEUE: usize = 64;
 
 #[derive(Debug)]
 pub enum SessionEnd {
@@ -63,13 +72,13 @@ pub async fn run(
         Some(_) => return Err(ClientError::Protocol("expected accept or reject")),
     }
 
-    let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel::<SessionMsg>();
-    let (video_tx, video_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (ctrl_tx, mut ctrl_rx) = mpsc::channel::<SessionMsg>(CTRL_QUEUE);
+    let (mut video, video_rx) = VideoQueue::new();
     let decoder = {
-        let (events, ctrl_tx) = (events.clone(), ctrl_tx.clone());
+        let (events, ctrl_tx, queued) = (events.clone(), ctrl_tx.clone(), video.bytes.clone());
         std::thread::Builder::new()
             .name("somedesk-decode".into())
-            .spawn(move || decode_loop(video_rx, events, ctrl_tx))
+            .spawn(move || decode_loop(video_rx, queued, events, ctrl_tx))
             .expect("spawn decoder thread")
     };
     let clipboard = clipboard.map(|c| ClipboardSync::start(c, ctrl_tx.clone(), true));
@@ -95,11 +104,15 @@ pub async fn run(
         loop {
             match receiver.recv::<SessionMsg>().await? {
                 None | Some(SessionMsg::Bye) => return Ok::<_, ClientError>(()),
-                Some(SessionMsg::Video { data, .. }) => {
-                    if video_tx.send(data).is_err() {
-                        return Ok(());
+                Some(SessionMsg::Video { data, keyframe, .. }) => match video.push(data, keyframe) {
+                    Queued::Yes => {}
+                    Queued::Dropped { request_keyframe } => {
+                        if request_keyframe {
+                            let _ = ctrl_tx.try_send(SessionMsg::RequestKeyframe);
+                        }
                     }
-                }
+                    Queued::Closed => return Ok(()),
+                },
                 Some(SessionMsg::ScreenInfo { width, height }) => events(ViewerEvent::ScreenInfo { width, height }),
                 Some(SessionMsg::ViewOnly) => events(ViewerEvent::ViewOnly),
                 Some(SessionMsg::Monitors { list, selected }) => events(ViewerEvent::Monitors { list, selected }),
@@ -108,7 +121,8 @@ pub async fn run(
                     events(ViewerEvent::Latency(rtt));
                 }
                 Some(SessionMsg::Ping { t }) => {
-                    let _ = ctrl_tx.send(SessionMsg::Pong { t });
+                    // A host that pings faster than we can answer gets fewer answers.
+                    let _ = ctrl_tx.try_send(SessionMsg::Pong { t });
                 }
                 Some(SessionMsg::Clipboard { text }) => {
                     if let Some(c) = &clipboard {
@@ -139,7 +153,9 @@ pub async fn run(
     if let Some(f) = &files {
         f.detach().await;
     }
-    drop(video_tx);
+    drop(video);
+    // Unblocks the clipboard thread if it waits for room in the queue.
+    drop(ctrl_rx);
     let clipboard = clipboard.map(ClipboardSync::stop);
     let _ = tokio::task::spawn_blocking(move || {
         let _ = decoder.join();
@@ -151,7 +167,65 @@ pub async fn run(
     result.map(|_| SessionEnd::Closed)
 }
 
-fn decode_loop(rx: std::sync::mpsc::Receiver<Vec<u8>>, events: EventSink, ctrl: mpsc::UnboundedSender<SessionMsg>) {
+/// The decoder's queue, bounded in frames and bytes. H.264 frames depend on the ones before, so
+/// once one has to be dropped, everything up to the next keyframe is dropped too.
+struct VideoQueue {
+    tx: SyncSender<Vec<u8>>,
+    /// Bytes queued and not yet taken by the decoder.
+    bytes: Arc<AtomicUsize>,
+    skipping: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Queued {
+    Yes,
+    /// Dropped; ask the host for a keyframe if `request_keyframe`.
+    Dropped {
+        request_keyframe: bool,
+    },
+    /// The decoder is gone.
+    Closed,
+}
+
+impl VideoQueue {
+    fn new() -> (Self, Receiver<Vec<u8>>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel(VIDEO_QUEUE_FRAMES);
+        (Self { tx, bytes: Arc::default(), skipping: false }, rx)
+    }
+
+    fn push(&mut self, data: Vec<u8>, keyframe: bool) -> Queued {
+        if self.skipping && !keyframe {
+            return Queued::Dropped { request_keyframe: false };
+        }
+        let len = data.len();
+        let queued = self.bytes.fetch_add(len, Ordering::AcqRel);
+        if queued > 0 && queued + len > VIDEO_QUEUE_BYTES {
+            self.bytes.fetch_sub(len, Ordering::AcqRel);
+            return self.skip();
+        }
+        match self.tx.try_send(data) {
+            Ok(()) => {
+                self.skipping = false;
+                Queued::Yes
+            }
+            Err(TrySendError::Full(_)) => {
+                self.bytes.fetch_sub(len, Ordering::AcqRel);
+                self.skip()
+            }
+            Err(TrySendError::Disconnected(_)) => Queued::Closed,
+        }
+    }
+
+    /// Starts (or goes on) waiting for a keyframe; asks for one when starting, and again when a
+    /// keyframe itself had to be dropped.
+    fn skip(&mut self) -> Queued {
+        tracing::debug!("the decoder is behind; skipping to the next keyframe");
+        self.skipping = true;
+        Queued::Dropped { request_keyframe: true }
+    }
+}
+
+fn decode_loop(rx: Receiver<Vec<u8>>, queued: Arc<AtomicUsize>, events: EventSink, ctrl: mpsc::Sender<SessionMsg>) {
     let mut decoder = match H264Decoder::new() {
         Ok(d) => d,
         Err(e) => {
@@ -164,13 +238,14 @@ fn decode_loop(rx: std::sync::mpsc::Receiver<Vec<u8>>, events: EventSink, ctrl: 
         // If we fall behind, decode everything (H.264 needs every frame) but only display the newest.
         let mut latest = None;
         loop {
+            queued.fetch_sub(data.len(), Ordering::AcqRel);
             match decoder.decode(&data) {
                 Ok(Some(frame)) => latest = Some(frame),
                 Ok(None) => {}
                 Err(e) => {
                     tracing::debug!("decode error: {e:#}");
                     if last_keyframe_request.is_none_or(|t| t.elapsed() > Duration::from_millis(500)) {
-                        let _ = ctrl.send(SessionMsg::RequestKeyframe);
+                        let _ = ctrl.try_send(SessionMsg::RequestKeyframe);
                         last_keyframe_request = Some(Instant::now());
                     }
                 }
@@ -183,5 +258,41 @@ fn decode_loop(rx: std::sync::mpsc::Receiver<Vec<u8>>, events: EventSink, ctrl: 
         if let Some(frame) = latest {
             events(ViewerEvent::Frame(frame));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_decoder_that_falls_behind_skips_to_the_next_keyframe() {
+        let (mut q, rx) = VideoQueue::new();
+        assert_eq!(q.push(vec![1; 10], true), Queued::Yes);
+        for _ in 1..VIDEO_QUEUE_FRAMES {
+            assert_eq!(q.push(vec![2; 10], false), Queued::Yes);
+        }
+        assert_eq!(q.push(vec![3; 10], false), Queued::Dropped { request_keyframe: true }, "full");
+        // Room again, but frames that build on the dropped one are no use.
+        let taken = rx.recv().unwrap();
+        q.bytes.fetch_sub(taken.len(), Ordering::AcqRel);
+        assert_eq!(q.push(vec![4; 10], false), Queued::Dropped { request_keyframe: false });
+        assert_eq!(q.push(vec![5; 10], true), Queued::Yes, "a keyframe starts over");
+        assert_eq!(q.push(vec![6; 10], false), Queued::Dropped { request_keyframe: true }, "full again");
+        drop(rx);
+        assert_eq!(q.push(vec![7; 10], true), Queued::Closed);
+    }
+
+    #[test]
+    fn the_queue_is_bounded_in_bytes_too() {
+        let (mut q, rx) = VideoQueue::new();
+        assert_eq!(q.push(vec![0; VIDEO_QUEUE_BYTES / 2], true), Queued::Yes);
+        assert_eq!(q.push(vec![0; VIDEO_QUEUE_BYTES / 2], false), Queued::Yes);
+        assert_eq!(q.push(vec![0; 1], false), Queued::Dropped { request_keyframe: true });
+        assert_eq!(q.bytes.load(Ordering::Relaxed), VIDEO_QUEUE_BYTES);
+        // A single frame larger than the budget still gets through an empty queue.
+        let (mut q, _rx2) = VideoQueue::new();
+        assert_eq!(q.push(vec![0; VIDEO_QUEUE_BYTES + 1], true), Queued::Yes);
+        drop(rx);
     }
 }

@@ -3,6 +3,10 @@
 # (or `podman compose`). Clients connect to this host on UDP 21116.
 # SOMEDESK_IMAGE picks another image: a version such as ghcr.io/giosuel/somedesk-server:0.1.0,
 # :main for the latest code on main, or one you built (podman build -f packaging/server/Dockerfile).
+# The server's data (its certificate, which clients pin) is on a named volume. With a bind mount
+# instead, make the directory writable for the image's user first: the server runs as `somedesk`
+# (UID and GID 999), not root: `sudo chown 999:999 ./data`, or with rootless podman
+# `podman unshare chown 999:999 ./data`.
 services:
   db:
     image: docker.io/library/postgres:17
@@ -20,7 +24,9 @@ services:
   server:
     image: ${SOMEDESK_IMAGE:-ghcr.io/giosuel/somedesk-server:latest}
     environment:
-      DATABASE_URL: postgres://somedesk:${SOMEDESK_DB_PASSWORD}@db/somedesk
+      # The password goes separately, so it may have characters a URL can't (@, /, :, %).
+      DATABASE_URL: postgres://somedesk@db/somedesk
+      PGPASSWORD: ${SOMEDESK_DB_PASSWORD}
     ports:
       - "21116:21116/udp"
     volumes:
@@ -28,6 +34,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "somedesk-server", "check"]
+      interval: 30s
+      start_period: 10s
+      retries: 3
     restart: unless-stopped
 volumes:
   db:

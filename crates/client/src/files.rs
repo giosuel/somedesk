@@ -18,6 +18,10 @@ use tokio::sync::mpsc;
 
 /// How many outgoing file messages may queue up before senders wait.
 const LANE_CAPACITY: usize = 8;
+/// Offers from the peer that may wait for the user's answer at once; more are declined.
+const MAX_PENDING_OFFERS: usize = 16;
+/// Files that may be coming in at once, waiting or accepted.
+const MAX_INCOMING: usize = 64;
 /// Minimum time between progress events for one transfer.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 
@@ -389,7 +393,9 @@ impl FileTransfers {
     }
 
     async fn on_offer(&self, id: u32, name: &str, size: u64) {
-        let Some(name) = sanitize_file_name(name) else {
+        let named = sanitize_file_name(name)
+            .and_then(|name| Some((inside(&self.inner.dir, &format!(".{name}.{id}.somedesk-part"))?, name)));
+        let Some((part, name)) = named else {
             self.send_msg(SessionMsg::FileReject { id, reason: "invalid file name".into() }).await;
             return;
         };
@@ -398,7 +404,12 @@ impl FileTransfers {
             if incoming.contains_key(&id) {
                 return;
             }
-            let part = self.inner.dir.join(format!(".{name}.{id}.somedesk-part"));
+            let waiting = incoming.values().filter(|i| i.file.is_none()).count();
+            if waiting >= MAX_PENDING_OFFERS || incoming.len() >= MAX_INCOMING {
+                drop(incoming);
+                self.send_msg(SessionMsg::FileReject { id, reason: "too many files at once".into() }).await;
+                return;
+            }
             incoming.insert(
                 id,
                 Incoming {
@@ -461,7 +472,7 @@ impl FileTransfers {
             if &digest != sha256 {
                 return Err("the file arrived damaged (checksum mismatch)");
             }
-            let dest = unique_path(&self.inner.dir, &inc.name).await;
+            let dest = unique_path(&self.inner.dir, &inc.name).await.ok_or("invalid file name")?;
             tokio::fs::rename(&inc.part, &dest).await.map_err(|_| "cannot save the file")?;
             Ok(dest)
         }
@@ -518,12 +529,20 @@ impl UploadError {
     }
 }
 
-/// Makes a file name from the peer safe to use: no directories, no control characters, no
-/// hidden files, at most 200 bytes. Returns `None` if nothing usable is left.
+/// Makes a file name from the peer safe to use, on every system the file may end up on: no
+/// directories, no drive prefixes or NTFS streams (`:`), none of the characters Windows forbids
+/// (they become `_`), no control or invisible formatting characters (such as the bidi overrides
+/// that make `exe.txt` out of `txt.exe`), no hidden files, no trailing dots or spaces, no reserved
+/// device names (`CON`, `NUL.txt`, `COM1`, ...), at most 200 bytes. Returns `None` if nothing
+/// usable is left.
 pub fn sanitize_file_name(name: &str) -> Option<String> {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
-    let cleaned: String = base.chars().filter(|c| !c.is_control()).collect();
-    let cleaned = cleaned.trim().trim_start_matches('.').trim();
+    let cleaned: String = base
+        .chars()
+        .filter(|c| !c.is_control() && !is_format_char(*c))
+        .map(|c| if matches!(c, ':' | '<' | '>' | '"' | '|' | '?' | '*') { '_' } else { c })
+        .collect();
+    let cleaned = trim_name(cleaned.trim_start().trim_start_matches('.'));
     if cleaned.is_empty() {
         return None;
     }
@@ -537,19 +556,64 @@ pub fn sanitize_file_name(name: &str) -> Option<String> {
             cut -= 1;
         }
         out.truncate(cut);
+        out.truncate(trim_name(&out).len());
         if let Some(ext) = ext {
             out.push('.');
             out.push_str(&ext);
         }
     }
-    Some(out)
+    if is_reserved_device_name(&out) {
+        out.insert(0, '_');
+    }
+    Some(out).filter(|n| is_plain_name(n))
 }
 
-/// `dir/name`, or `dir/name (2).ext`, ... if that exists already.
-async fn unique_path(dir: &Path, name: &str) -> PathBuf {
-    let first = dir.join(name);
+/// Without the leading and trailing spaces and the trailing dots Windows drops from names.
+fn trim_name(name: &str) -> &str {
+    name.trim().trim_end_matches(['.', ' ']).trim()
+}
+
+/// Unicode format characters (category Cf): invisible, and some reorder the text around them.
+fn is_format_char(c: char) -> bool {
+    matches!(c,
+        '\u{ad}' | '\u{600}'..='\u{605}' | '\u{61c}' | '\u{6dd}' | '\u{70f}' | '\u{180e}'
+        | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{206f}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}'
+        | '\u{e0001}' | '\u{e0020}'..='\u{e007f}')
+}
+
+/// Names Windows maps to devices, with any extension: `NUL.txt` is the device too.
+fn is_reserved_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    match stem.as_str() {
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
+        s => ["COM", "LPT"].iter().any(|p| {
+            s.strip_prefix(p)
+                .is_some_and(|d| (d.len() == 1 && d.as_bytes()[0].is_ascii_digit()) || matches!(d, "¹" | "²" | "³"))
+        }),
+    }
+}
+
+/// Whether `name`, joined to a directory, names an entry right inside it on any system.
+fn is_plain_name(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_)))
+        && parts.next().is_none()
+        && !name.contains(['/', '\\', ':'])
+}
+
+/// `dir.join(name)`, refusing anything that would not end up right inside `dir`.
+fn inside(dir: &Path, name: &str) -> Option<PathBuf> {
+    let path = dir.join(name);
+    (is_plain_name(name) && path.parent() == Some(dir)).then_some(path)
+}
+
+/// `dir/name`, or `dir/name (2).ext`, ... if that exists already. `None` if `name` would not
+/// land right inside `dir`.
+async fn unique_path(dir: &Path, name: &str) -> Option<PathBuf> {
+    let first = inside(dir, name)?;
     if tokio::fs::try_exists(&first).await.ok() == Some(false) {
-        return first;
+        return Some(first);
     }
     let p = Path::new(name);
     let (stem, ext) = match (p.file_stem().and_then(|s| s.to_str()), p.extension().and_then(|e| e.to_str())) {
@@ -557,9 +621,9 @@ async fn unique_path(dir: &Path, name: &str) -> PathBuf {
         _ => (name.to_owned(), String::new()),
     };
     for i in 2.. {
-        let candidate = dir.join(format!("{stem} ({i}){ext}"));
+        let candidate = inside(dir, &format!("{stem} ({i}){ext}"))?;
         if tokio::fs::try_exists(&candidate).await.ok() == Some(false) {
-            return candidate;
+            return Some(candidate);
         }
     }
     unreachable!()
@@ -580,22 +644,83 @@ mod tests {
         assert_eq!(sanitize_file_name(".."), None);
         assert_eq!(sanitize_file_name("dir/"), None);
         assert_eq!(sanitize_file_name("   "), None);
+        // Windows: drive prefixes, streams, forbidden characters, devices, trailing dots.
+        assert_eq!(sanitize_file_name("C:evil.exe").as_deref(), Some("C_evil.exe"));
+        assert_eq!(sanitize_file_name("D:x.bat").as_deref(), Some("D_x.bat"));
+        assert_eq!(sanitize_file_name("notes.txt:hidden").as_deref(), Some("notes.txt_hidden"));
+        assert_eq!(sanitize_file_name("a<b>c\"d|e?f*.txt").as_deref(), Some("a_b_c_d_e_f_.txt"));
+        assert_eq!(sanitize_file_name("CON").as_deref(), Some("_CON"));
+        assert_eq!(sanitize_file_name("nul.txt").as_deref(), Some("_nul.txt"));
+        assert_eq!(sanitize_file_name("Com1.tar.gz").as_deref(), Some("_Com1.tar.gz"));
+        assert_eq!(sanitize_file_name("LPT9").as_deref(), Some("_LPT9"));
+        assert_eq!(sanitize_file_name("COM¹").as_deref(), Some("_COM¹"));
+        assert_eq!(sanitize_file_name("console.log").as_deref(), Some("console.log"));
+        assert_eq!(sanitize_file_name("COM10").as_deref(), Some("COM10"));
+        assert_eq!(sanitize_file_name("äé").as_deref(), Some("äé"));
+        assert_eq!(sanitize_file_name("report.pdf. . ").as_deref(), Some("report.pdf"));
+        assert_eq!(sanitize_file_name("..."), None);
+        assert_eq!(sanitize_file_name(". ."), None);
+        // Invisible characters, among them the override that shows "exe.txt" for "txt.exe".
+        assert_eq!(sanitize_file_name("invoice\u{202e}txt.exe").as_deref(), Some("invoicetxt.exe"));
+        assert_eq!(sanitize_file_name("a\u{200b}b\u{feff}.txt").as_deref(), Some("ab.txt"));
+        assert_eq!(sanitize_file_name("\u{2066}\u{2069}"), None);
         let long = format!("{}.tar.gz", "ä".repeat(300));
         let s = sanitize_file_name(&long).unwrap();
         assert!(s.len() <= 200 && s.ends_with(".gz"), "{s}");
+        let dotted = format!("{}.{}.txt", "a".repeat(190), ".".repeat(20));
+        let s = sanitize_file_name(&dotted).unwrap();
+        assert!(!s.contains("..") && s.ends_with("a.txt"), "{s}");
+    }
+
+    #[test]
+    fn sanitized_names_stay_inside_the_folder() {
+        let dir = Path::new("downloads");
+        for name in ["C:evil.exe", "\\\\server\\share\\x", "a/../../b", "..\\..\\x", "/abs", "x:", "CON", "?"] {
+            if let Some(clean) = sanitize_file_name(name) {
+                assert_eq!(inside(dir, &clean).unwrap().parent(), Some(dir), "{name} -> {clean}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unanswered_offers_are_capped() {
+        let dir = std::env::temp_dir().join(format!("somedesk-offers-{}", std::process::id()));
+        let offered = Arc::new(AtomicU32::new(0));
+        let sink: TransferSink = {
+            let offered = offered.clone();
+            Arc::new(move |ev| {
+                if matches!(ev, TransferEvent::Offered { .. }) {
+                    offered.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        };
+        let ft = FileTransfers::new(dir.clone(), AcceptPolicy::Ask, sink);
+        let mut lane = ft.attach();
+        for id in 0..MAX_PENDING_OFFERS as u32 + 3 {
+            assert!(ft.handle(&SessionMsg::FileOffer { id, name: format!("f{id}"), size: 1 }).await);
+        }
+        assert_eq!(offered.load(Ordering::Relaxed), MAX_PENDING_OFFERS as u32, "only so many dialogs");
+        for _ in 0..3 {
+            assert!(matches!(lane.recv().await, Some(SessionMsg::FileReject { .. })));
+        }
+        ft.detach().await;
+        assert!(!dir.exists(), "nothing was written");
     }
 
     #[tokio::test]
     async fn unique_paths_do_not_overwrite() {
         let dir = std::env::temp_dir().join(format!("somedesk-unique-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(unique_path(&dir, "a.txt").await, dir.join("a.txt"));
+        assert_eq!(unique_path(&dir, "a.txt").await, Some(dir.join("a.txt")));
         std::fs::write(dir.join("a.txt"), b"x").unwrap();
-        assert_eq!(unique_path(&dir, "a.txt").await, dir.join("a (2).txt"));
+        assert_eq!(unique_path(&dir, "a.txt").await, Some(dir.join("a (2).txt")));
         std::fs::write(dir.join("a (2).txt"), b"x").unwrap();
-        assert_eq!(unique_path(&dir, "a.txt").await, dir.join("a (3).txt"));
+        assert_eq!(unique_path(&dir, "a.txt").await, Some(dir.join("a (3).txt")));
         std::fs::write(dir.join("noext"), b"x").unwrap();
-        assert_eq!(unique_path(&dir, "noext").await, dir.join("noext (2)"));
+        assert_eq!(unique_path(&dir, "noext").await, Some(dir.join("noext (2)")));
+        for bad in ["../x", "a/b", "C:x.exe", "..", "/etc/passwd", ""] {
+            assert_eq!(unique_path(&dir, bad).await, None, "{bad}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -34,7 +34,7 @@ for d in 50 51; do
     echo $! >"$DEMO_DIR/openbox$d.pid"
 done
 
-target/debug/somedesk-server --listen "127.0.0.1:$PORT" --database-url "$DB_URL" --data-dir "$DEMO_DIR/server-data" \
+"${CARGO_TARGET_DIR:-target}/debug/somedesk-server" --listen "127.0.0.1:$PORT" --database-url "$DB_URL" --data-dir "$DEMO_DIR/server-data" \
     >"$DEMO_DIR/server.log" 2>&1 &
 echo $! >"$DEMO_DIR/server.pid"
 sleep 1

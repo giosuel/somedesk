@@ -14,13 +14,16 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 ADMIN_URL="${SOMEDESK_TEST_DATABASE_URL:-postgres://sysadmin:devpass@localhost/postgres}"
 DB_URL="${ADMIN_URL%/*}/somedesk_nat"
+# Not 21116: that is the real server's port, maybe on this very machine.
+SERVER="10.99.0.1:21216"
 ME="$(id -un)"
 WORK="$(mktemp -d)"
 
 # --workspace resolves dependency features like `cargo test --workspace` (scripts/test.sh), so
 # everything the tests already compiled is reused instead of being built a second time.
 cargo build -q --workspace --bins --examples
-PEER="$PWD/target/debug/examples/nat_peer"
+TARGET="$(realpath "${CARGO_TARGET_DIR:-target}")"
+PEER="$TARGET/debug/examples/nat_peer"
 
 cleanup() {
     [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
@@ -93,13 +96,13 @@ run_case() { # $1: name, $2: MASQUERADE options, $3: expected route
     echo "== $1"
     setup_network "$2"
     psql "$ADMIN_URL" -qc "DROP DATABASE IF EXISTS somedesk_nat WITH (FORCE)" -c "CREATE DATABASE somedesk_nat" >/dev/null
-    target/debug/somedesk-server --listen 10.99.0.1:21116 --database-url "$DB_URL" --data-dir "$WORK/server" \
+    "$TARGET/debug/somedesk-server" --listen "$SERVER" --database-url "$DB_URL" --data-dir "$WORK/server" \
         >"$WORK/server.log" 2>&1 &
     SERVER_PID=$!
     sleep 1
-    sudo ip netns exec sd-lan-a runuser -u "$ME" -- "$PEER" 10.99.0.1 bob host "$WORK/id" >"$WORK/host.out" 2>"$WORK/host.log" &
+    sudo ip netns exec sd-lan-a runuser -u "$ME" -- "$PEER" "$SERVER" bob host "$WORK/id" >"$WORK/host.out" 2>"$WORK/host.log" &
     local host_pid=$!
-    sudo ip netns exec sd-lan-b runuser -u "$ME" -- "$PEER" 10.99.0.1 alice viewer "$WORK/id" >"$WORK/viewer.out" 2>"$WORK/viewer.log" || true
+    sudo ip netns exec sd-lan-b runuser -u "$ME" -- "$PEER" "$SERVER" alice viewer "$WORK/id" >"$WORK/viewer.out" 2>"$WORK/viewer.log" || true
     wait "$host_pid" || true
     cat "$WORK/viewer.out" "$WORK/host.out"
     grep -h "candidates" "$WORK/host.log" || true
